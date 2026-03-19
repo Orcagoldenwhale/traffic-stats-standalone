@@ -67,11 +67,13 @@ async function createBackup(filePath) {
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
-// Serve static frontend files in production
+// Serve static frontend files
 const DIST_DIR = join(__dirname, 'dist');
+const PUBLIC_DIR = join(__dirname, 'public');
 if (existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));
 }
+app.use(express.static(PUBLIC_DIR));
 
 // --- Sync Timestamps ---
 let timestamps = { data: Date.now(), chessboard: Date.now(), assets: Date.now(), traffic: Date.now(), traffic_data: Date.now() };
@@ -709,7 +711,12 @@ app.get('/api/traffic-data', async (req, res) => {
     }
 });
 
-// SPA fallback: serve index.html for all non-API routes in production
+// Root redirect to traffic.html
+app.get('/', (req, res) => {
+    res.redirect('/traffic.html');
+});
+
+// SPA fallback: serve index.html for Vite-built apps
 if (existsSync(DIST_DIR)) {
     app.get('*', (req, res) => {
         res.sendFile(join(DIST_DIR, 'index.html'));
