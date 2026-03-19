@@ -1,0 +1,6 @@
+node_modules/
+dist/
+saved_sessions/backups/
+saved_sessions/_traffic_data.json
+*.tmp
+.DS_Store
