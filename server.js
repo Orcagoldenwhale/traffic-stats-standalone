@@ -595,7 +595,7 @@ app.delete('/api/traffic/:name', async (req, res) => {
 app.patch('/api/traffic/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -892,7 +892,7 @@ app.delete('/api/traffic-admin/:name', async (req, res) => {
 app.patch('/api/traffic-admin/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {

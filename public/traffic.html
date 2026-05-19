@@ -145,6 +145,8 @@
             const [campTask, setCampTask] = useState(data.campTask || '');
             const [showTaskPopup, setShowTaskPopup] = useState(false);
             const [taskInput, setTaskInput] = useState('');
+            const [campNote, setCampNote] = useState(data.campNote || '');
+            const [isSavingNote, setIsSavingNote] = useState(false);
             const [campTimer, setCampTimer] = useState(data.campTimer || 0);
             const [, forceUpdate] = useState(0);
 
@@ -273,6 +275,41 @@
             }, [comment, saveComment]);
 
             useEffect(() => () => { if (commentTimer.current) clearTimeout(commentTimer.current); }, []);
+
+            const noteTimer = useRef(null);
+            const lastSavedNote = useRef(data.campNote || '');
+
+            const saveNote = useCallback(async (value) => {
+                if (value === lastSavedNote.current) return;
+                setIsSavingNote(true);
+                try {
+                    const res = await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ campNote: value }),
+                        keepalive: true
+                    });
+                    if (res.ok) lastSavedNote.current = value;
+                } catch(e) {
+                    console.error('Failed to save note', e);
+                } finally {
+                    setIsSavingNote(false);
+                }
+            }, [data.customName]);
+
+            const handleNoteChange = useCallback((e) => {
+                const val = e.target.value;
+                setCampNote(val);
+                if (noteTimer.current) clearTimeout(noteTimer.current);
+                noteTimer.current = setTimeout(() => saveNote(val), 800);
+            }, [saveNote]);
+
+            const handleNoteBlur = useCallback(() => {
+                if (noteTimer.current) clearTimeout(noteTimer.current);
+                saveNote(campNote);
+            }, [campNote, saveNote]);
+
+            useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); }, []);
 
             const handleDelete = async (e) => {
                 e.stopPropagation();
@@ -528,6 +565,21 @@
                                     />
                                     {isSavingComment && <i className="fas fa-circle-notch fa-spin text-[8px] text-zinc-600 absolute -right-3"></i>}
                                     {isSavingComment && <i className="fas fa-spinner fa-spin text-[8px] text-purple-400 absolute -right-3"></i>}
+                                </div>
+                                <div className={`ml-3 flex items-center gap-1.5 transition-opacity ${campNote ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 focus-within:opacity-100 relative`}>
+                                    <i className="fas fa-sticky-note text-[8px] text-orange-500"></i>
+                                    <input
+                                        type="text"
+                                        value={campNote}
+                                        onChange={handleNoteChange}
+                                        onBlur={handleNoteBlur}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') e.target.blur();
+                                        }}
+                                        placeholder="Заметка 2..."
+                                        className="bg-transparent text-[10px] text-orange-400 placeholder-orange-900 outline-none w-40 focus:text-orange-300 focus:border-b focus:border-orange-700 border-b border-transparent pb-[1px] transition-colors"
+                                    />
+                                    {isSavingNote && <i className="fas fa-spinner fa-spin text-[8px] text-orange-400 absolute -right-3"></i>}
                                 </div>
                             </div>
                         </div>
@@ -1701,6 +1753,7 @@ function ensureSharing(sheetId, props) {
                             addedAt: campData.addedAt || '',
                             costAlert: campData.costAlert || 0,
                             campTask: campData.campTask || '',
+                            campNote: campData.campNote || '',
                             campTimer: campData.campTimer || 0,
                             primaryKeyword: campData.primaryKeyword || '',
                             lastReadAt: campData.lastReadAt || null
@@ -1726,11 +1779,12 @@ function ensureSharing(sheetId, props) {
                                 siteUrl: config.siteUrl || '',
                                 addedAt: config.addedAt || '',
                                 costAlert: config.costAlert || 0,
+                                campNote: config.campNote || '',
                                 primaryKeyword: config.primaryKeyword || ''
                             });
                         }
                     }
-                    
+
                     // Sort campaigns strictly by the order saved in the backend configuration
                     finalData.sort((a, b) => {
                         let aIdx = configOrder.current.indexOf(a.customName); 
