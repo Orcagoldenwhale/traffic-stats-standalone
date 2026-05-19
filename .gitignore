@@ -1,6 +1,19 @@
 node_modules/
 dist/
+
+# Runtime data
 saved_sessions/backups/
+saved_sessions/_traffic.json
+saved_sessions/_traffic_admin.json
 saved_sessions/_traffic_data.json
+saved_sessions/_traffic_admin_data.json
+saved_sessions/_traffic_data_snapshot.json
+saved_sessions/_traffic_admin_data_snapshot.json
+saved_sessions/_audit.log*
+saved_sessions/analytics/
+saved_sessions/*.txt
+
+# Temp & backups
 *.tmp
+*.bak-*
 .DS_Store

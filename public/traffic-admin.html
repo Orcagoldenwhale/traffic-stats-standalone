@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Traffic Ops - Campaign Stats</title>
+    <title>Traffic Ops - Admin</title>
 
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -19,12 +19,10 @@
         input[type=number] { -moz-appearance: textfield; }
         body {
             background-color: #09090b;
-            /* Zinc 950 */
             color: #e4e4e7;
             font-family: 'Courier New', Courier, monospace;
         }
 
-        /* Custom Scrollbar */
         ::-webkit-scrollbar {
             height: 6px;
             width: 6px;
@@ -43,7 +41,6 @@
             background: #52525b;
         }
 
-        /* Smooth Accordion Animation */
         .accordion-content {
             transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out;
             max-height: 0;
@@ -53,11 +50,9 @@
 
         .accordion-content.expanded {
             max-height: 1000px;
-            /* Arbitrary large number for max-height transition */
             opacity: 1;
         }
 
-        /* Table styling */
         .queries-table th {
             position: sticky;
             top: 0;
@@ -86,6 +81,58 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
+        const ADMIN_PASSWORD = '1243';
+        const AUTH_KEY = 'traffic_admin_auth';
+
+        // --- PASSWORD GATE ---
+        const PasswordGate = ({ onAuth }) => {
+            const [pwd, setPwd] = useState('');
+            const [error, setError] = useState(false);
+            const inputRef = useRef(null);
+
+            useEffect(() => { inputRef.current?.focus(); }, []);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (pwd === ADMIN_PASSWORD) {
+                    sessionStorage.setItem(AUTH_KEY, '1');
+                    onAuth();
+                } else {
+                    setError(true);
+                    setPwd('');
+                    setTimeout(() => setError(false), 1500);
+                }
+            };
+
+            return (
+                <div className="flex flex-col h-full items-center justify-center bg-black">
+                    <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-8 w-80 shadow-2xl">
+                        <div className="flex items-center justify-center mb-6">
+                            <div className="w-12 h-12 rounded-full bg-purple-500/20 flex items-center justify-center">
+                                <i className="fas fa-lock text-purple-400 text-lg"></i>
+                            </div>
+                        </div>
+                        <h2 className="text-center text-sm font-bold text-zinc-300 uppercase tracking-widest mb-1">Traffic Admin</h2>
+                        <p className="text-center text-[10px] text-zinc-600 mb-6">Введите пароль для доступа</p>
+                        <form onSubmit={handleSubmit}>
+                            <input
+                                ref={inputRef}
+                                type="password"
+                                value={pwd}
+                                onChange={e => setPwd(e.target.value)}
+                                placeholder="Пароль"
+                                className={`w-full bg-zinc-900 border ${error ? 'border-red-500 animate-pulse' : 'border-zinc-700'} text-sm text-zinc-200 p-3 rounded-lg focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600 text-center tracking-widest mb-4`}
+                            />
+                            <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2.5 text-xs font-bold rounded-lg shadow-lg transition-colors uppercase tracking-wider">
+                                Войти
+                            </button>
+                            {error && <p className="text-red-400 text-[10px] text-center mt-3">Неверный пароль</p>}
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
         // --- CUSTOM STATUS CONFIG ---
         const CUSTOM_STATUSES = [
             { key: 'warmup', label: 'ПРОГРЕВ', color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: 'fa-fire' },
@@ -96,10 +143,8 @@
         const STATUS_MAP = Object.fromEntries(CUSTOM_STATUSES.map(s => [s.key, s]));
         const DEFAULT_STATUS = CUSTOM_STATUSES[0];
 
-        // --- MOCK DATA (Имитация ответа от твоего Google Ads скрипта) ---
         const mockCampaignsData = [];
 
-        // --- Clipboard helper (works over HTTP and HTTPS) ---
         function copyToClipboard(text) {
             if (navigator.clipboard && window.isSecureContext) {
                 return navigator.clipboard.writeText(text);
@@ -129,14 +174,12 @@
             const [isExpanded, setIsExpanded] = useState(false);
             const [isRefreshing, setIsRefreshing] = useState(false);
             const [isDeleting, setIsDeleting] = useState(false);
-            const [showMoveConfirm, setShowMoveConfirm] = useState(false);
-            const [isMoving, setIsMoving] = useState(false);
             const [showEditModal, setShowEditModal] = useState(false);
             const [editName, setEditName] = useState(data.customName);
             const [editUrl, setEditUrl] = useState(data.url || '');
             const [editSiteUrl, setEditSiteUrl] = useState(data.siteUrl || '');
             const [isSavingEdit, setIsSavingEdit] = useState(false);
-            
+
             const [comment, setComment] = useState(data.comment || '');
             const [isSavingComment, setIsSavingComment] = useState(false);
             const [showAlertPopup, setShowAlertPopup] = useState(false);
@@ -153,7 +196,7 @@
                 setCostAlert(val);
                 setShowAlertPopup(false);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ costAlert: val }), keepalive: true
                     });
@@ -164,7 +207,7 @@
                 setAlertValue('');
                 setShowAlertPopup(false);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ costAlert: 0 }), keepalive: true
                     });
@@ -174,12 +217,13 @@
                 setCampTask(text);
                 setShowTaskPopup(false);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ campTask: text }), keepalive: true
                     });
                 } catch (e) { console.error('Failed to save task', e); }
             };
+
             const TIMER_DURATION = 24 * 60 * 60 * 1000;
             const timerActive = campTimer > 0 && (Date.now() - campTimer) < TIMER_DURATION;
             const timerProgress = timerActive ? Math.max(0, 1 - (Date.now() - campTimer) / TIMER_DURATION) : 0;
@@ -194,7 +238,7 @@
                 const newVal = timerActive ? 0 : Date.now();
                 setCampTimer(newVal);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ campTimer: newVal }), keepalive: true
                     });
@@ -220,7 +264,7 @@
                 const next = (primaryKeyword || '').trim().toLowerCase() === (kwText || '').trim().toLowerCase() ? '' : kwText;
                 setPrimaryKeyword(next);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ primaryKeyword: next }),
@@ -233,7 +277,7 @@
                 setCustomStatus(newKey);
                 setShowStatusPicker(false);
                 try {
-                    await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ customStatus: newKey }),
@@ -246,7 +290,7 @@
                 if (value === lastSavedComment.current) return;
                 setIsSavingComment(true);
                 try {
-                    const res = await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
+                    const res = await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ comment: value }),
@@ -274,29 +318,11 @@
 
             useEffect(() => () => { if (commentTimer.current) clearTimeout(commentTimer.current); }, []);
 
-            const handleDelete = async (e) => {
-                e.stopPropagation();
-                if (!confirm(`Удалить кампанию "${data.customName}"?`)) return;
-                setIsDeleting(true);
-                try {
-                    const res = await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, { method: 'DELETE' });
-                    if (res.ok) {
-                        onRefresh();
-                    } else {
-                        alert('Ошибка удаления. Возможно, кампания уже удалена.');
-                        setIsDeleting(false);
-                    }
-                } catch(err) {
-                    alert('Ошибка сети при удалении');
-                    setIsDeleting(false);
-                }
-            };
-
             const handleSaveEdit = async () => {
                 if (!editName.trim() || !editUrl.trim()) { alert('Заполните оба поля'); return; }
                 setIsSavingEdit(true);
                 try {
-                    const res = await fetch(`/api/traffic/${encodeURIComponent(data.customName)}/edit`, {
+                    const res = await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}/edit`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ newName: editName.trim(), newUrl: editUrl.trim(), newSiteUrl: editSiteUrl.trim() })
@@ -307,25 +333,21 @@
                 finally { setIsSavingEdit(false); }
             };
 
-            const handleMoveToAdmin = async () => {
-                setIsMoving(true);
+            const handleDelete = async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Удалить кампанию "${data.customName}"?`)) return;
+                setIsDeleting(true);
                 try {
-                    const res = await fetch('/api/traffic/move-to-admin', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: data.customName })
-                    });
+                    const res = await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, { method: 'DELETE' });
                     if (res.ok) {
-                        setShowMoveConfirm(false);
                         onRefresh();
                     } else {
-                        const err = await res.json().catch(() => ({}));
-                        alert(err.error || 'Ошибка перемещения');
+                        alert('Ошибка удаления. Возможно, кампания уже удалена.');
+                        setIsDeleting(false);
                     }
-                } catch (e) {
-                    alert('Ошибка сети');
-                } finally {
-                    setIsMoving(false);
+                } catch(err) {
+                    alert('Ошибка сети при удалении');
+                    setIsDeleting(false);
                 }
             };
 
@@ -349,7 +371,6 @@
                     onMouseEnter={() => { if (onDragEnter) onDragEnter(index); }}
                 >
                     <div className="flex items-center p-3 relative">
-                        {/* Drag Handle — mousedown triggers drag mode */}
                         <div 
                             className="w-6 h-8 flex-shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-200 transition-colors mr-1 select-none" 
                             title="Перетащите для перемещения"
@@ -360,7 +381,6 @@
                         >
                             <i className="fas fa-grip-vertical text-[11px] pointer-events-none"></i>
                         </div>
-                        {/* Expand/Collapse Chevron */}
                         <div className="w-5 flex-shrink-0 flex items-center justify-center">
                             {hasAnyExpand && (
                                 <button
@@ -372,7 +392,6 @@
                             )}
                         </div>
 
-                        {/* 1. Название */}
                         <div className="flex-1 min-w-0 pr-4">
                             <div className="flex items-center gap-3 mb-1">
                                 <h3 className="font-bold text-sm text-zinc-100 truncate">{data.customName}</h3>
@@ -411,26 +430,6 @@
                                         <i className="fas fa-link text-[10px]"></i>
                                     </button>
                                 )}
-                                <div className="relative">
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setShowMoveConfirm(true); }}
-                                        className="text-zinc-600 hover:text-purple-400 transition-colors opacity-0 group-hover:opacity-100"
-                                        title="Переместить в Traffic Admin"
-                                    >
-                                        <i className="fas fa-arrow-right text-[10px]"></i>
-                                    </button>
-                                    {showMoveConfirm && (
-                                        <div className="absolute left-0 top-6 z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl p-3 w-56" onClick={e => e.stopPropagation()}>
-                                            <p className="text-[11px] text-zinc-300 mb-3">Переместить в <span className="text-purple-400 font-bold">Traffic Admin</span>?</p>
-                                            <div className="flex gap-2 justify-end">
-                                                <button onClick={() => setShowMoveConfirm(false)} className="px-3 py-1 text-[10px] text-zinc-400 hover:text-white transition-colors rounded">Нет</button>
-                                                <button onClick={handleMoveToAdmin} disabled={isMoving} className="px-3 py-1 text-[10px] bg-purple-600 hover:bg-purple-500 text-white rounded font-bold transition-colors disabled:opacity-50">
-                                                    {isMoving ? <i className="fas fa-circle-notch fa-spin"></i> : 'Да'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
                             </div>
                             <div className="text-[10px] text-zinc-500 flex items-center gap-2 flex-wrap">
                                 <span title="Системное имя в Google Ads" className="truncate max-w-[200px] inline-block">{data.name}</span>
@@ -498,7 +497,7 @@
                                     </span>
                                 )}
                                 {data.impressionsStale && !data.isStale && (
-                                    <span className="flex items-center gap-1 text-orange-400" title="⚠️ Показы за сегодня не менялись больше 5 часов. Возможно, скрипт отключился или кампания остановлена.">
+                                    <span className="flex items-center gap-1 text-orange-400" title="⚠️ Показы за сегодня не менялись больше 5 часов.">
                                         <i className="fas fa-exclamation-circle text-[10px]"></i>
                                         <span className="text-[9px]">Показы не меняются</span>
                                     </span>
@@ -571,7 +570,6 @@
                             )}
                         </div>
 
-                        {/* Stats: Today */}
                         <div className="w-56 flex-shrink-0 border-l border-zinc-800 pl-4">
                             <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Сегодня</div>
                             <div className="flex gap-3 text-xs">
@@ -581,7 +579,6 @@
                             </div>
                         </div>
 
-                        {/* Stats: All Time */}
                         <div className="w-56 flex-shrink-0 border-l border-zinc-800 pl-4">
                             <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1 flex items-center gap-2">
                                 Все время
@@ -623,10 +620,8 @@
                         </div>
                     </div>
 
-                    {/* EXPANDED CONTENT — Tabbed: Queries / Keywords / Ad Texts */}
                     <div className={`accordion-content ${isExpanded ? 'expanded' : ''} bg-[#0c0c0e] border-t border-zinc-800/50`}>
                         <div className="p-4 pl-11">
-                            {/* Tab bar */}
                             <div className="flex gap-4 mb-3 border-b border-zinc-800 pb-2">
                                 {hasQueries && (
                                     <button onClick={() => setActiveTab('queries')}
@@ -648,7 +643,6 @@
                                 )}
                             </div>
 
-                            {/* Tab: Queries */}
                             {activeTab === 'queries' && hasQueries && (
                                 <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
                                     <table className="w-full text-left border-collapse queries-table">
@@ -679,7 +673,6 @@
                                 </div>
                             )}
 
-                            {/* Tab: Keywords */}
                             {activeTab === 'keywords' && hasKeywords && (
                                 <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
                                     <table className="w-full text-left border-collapse queries-table">
@@ -721,7 +714,6 @@
                                 </div>
                             )}
 
-                            {/* Tab: Ad Texts */}
                             {activeTab === 'adTexts' && hasAdTexts && (
                                 <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
                                     <table className="w-full text-left border-collapse queries-table">
@@ -797,16 +789,10 @@
   var accountName = account.getName();
   var accountId = account.getCustomerId();
 
-  // 1. Создаем таблицу (или открываем ту, что создали вчера/ранее)
   var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
-
-  // 2. Собираем показы и затраты (Общие и за Сегодня)
   exportCampaignStats(spreadsheet);
-
-  // 3. Собираем реальные поисковые запросы за сегодня
   exportSearchTermsToday(spreadsheet);
 
-  // 4. Записываем время последнего обновления
   var metaSheet = getOrCreateSheet(spreadsheet, 'Метаданные');
   metaSheet.clear();
   metaSheet.appendRow(['Ключ', 'Значение']);
@@ -815,23 +801,19 @@
   Logger.log('Готово! Ссылка на таблицу: ' + spreadsheet.getUrl());
 }
 
-// Функция для выгрузки статистики кампаний (Показы и Затраты)
 function exportCampaignStats(spreadsheet) {
   var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
   sheet.clear();
   sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
 
-  // А) Запрашиваем данные за СЕГОДНЯ
   var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros " +
                    "FROM campaign WHERE segments.date DURING TODAY";
   var rowsToday = AdsApp.search(queryToday);
   while (rowsToday.hasNext()) {
     var row = rowsToday.next();
-    // Делим costMicros на 1 000 000, чтобы получить нормальную валюту
     sheet.appendRow([row.campaign.name, row.campaign.status, 'Сегодня', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
   }
 
-  // Б) Запрашиваем ОБЩИЕ данные (за всё время работы кампаний)
   var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros " +
                    "FROM campaign";
   var rowsTotal = AdsApp.search(queryTotal);
@@ -841,13 +823,11 @@ function exportCampaignStats(spreadsheet) {
   }
 }
 
-// Функция для выгрузки Поисковых запросов за сегодня
 function exportSearchTermsToday(spreadsheet) {
   var sheet = getOrCreateSheet(spreadsheet, 'Поисковые_запросы_Сегодня');
   sheet.clear();
   sheet.appendRow(['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
 
-  // Запрашиваем фразы только за СЕГОДНЯ и сортируем по количеству показов
   var query = "SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros " +
               "FROM search_term_view " +
               "WHERE segments.date DURING TODAY " +
@@ -867,7 +847,6 @@ function exportSearchTermsToday(spreadsheet) {
   }
 }
 
-// Вспомогательная функция: создает лист, если его нет
 function getOrCreateSheet(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) {
@@ -876,7 +855,6 @@ function getOrCreateSheet(spreadsheet, sheetName) {
   return sheet;
 }
 
-// Вспомогательная функция: создает публичную таблицу
 function getOrCreateSpreadsheet(accountName, accountId) {
   var props = PropertiesService.getScriptProperties();
   var sheetId = props.getProperty('MY_NEW_STATS_SHEET');
@@ -896,7 +874,6 @@ function getOrCreateSpreadsheet(accountName, accountId) {
   return spreadsheet;
 }`;
 
-        // --- MAIN APP ---
         const GOOGLE_ADS_SCRIPT_X2 = `function main() {
   var account = AdsApp.currentAccount();
   var accountId = account.getCustomerId();
@@ -908,19 +885,15 @@ function getOrCreateSpreadsheet(accountName, accountId) {
   Logger.log('ID кабинета: ' + accountId);
   Logger.log('Название: ' + accountName);
   
-  // 1. Получаем или создаем единую таблицу
   var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
 
-  // 2. БЛОК СТОРОННЕГО СЕРВИСА (Листы Info и Ads)
   Logger.log('--- Запуск сбора данных для стороннего сервиса ---');
   runThirdPartyService(spreadsheet, accountId, accountName, currency);
 
-  // 3. БЛОК ВАШЕГО ДАШБОРДА (Статистика кампаний и Поисковые запросы)
   Logger.log('--- Запуск сбора данных для личного дашборда ---');
   exportCampaignStats(spreadsheet);
   exportSearchTermsToday(spreadsheet);
 
-  // 4. Очистка стандартных пустых листов (если есть)
   var sheets = spreadsheet.getSheets();
   for (var j = 0; j < sheets.length; j++) {
     var name = sheets[j].getName();
@@ -934,9 +907,6 @@ function getOrCreateSpreadsheet(accountName, accountId) {
   Logger.log('=== ЗАВЕРШЕНИЕ СКРИПТА ===');
 }
 
-// =======================================================
-// ЧАСТЬ 1: СТОРОННИЙ СЕРВИС (Объявления и Инфо)
-// =======================================================
 function runThirdPartyService(spreadsheet, accountId, accountName, currency) {
   var now = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
   var today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
@@ -1037,42 +1007,32 @@ function getAdHeadline(ad) {
   try { return ad.getHeadline() || ''; } catch (e) { return ''; }
 }
 
-// =======================================================
-// ЧАСТЬ 2: ЛИЧНЫЙ ДАШБОРД (Кампании и Запросы)
-// =======================================================
 function exportCampaignStats(spreadsheet) {
   var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
   sheet.clear();
   sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
 
-  // Сегодня
   var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign WHERE segments.date DURING TODAY";
   var rowsToday = AdsApp.search(queryToday);
   while (rowsToday.hasNext()) {
     var row = rowsToday.next();
-    
     var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
     var campaignStatus = (row.campaign && row.campaign.status) ? row.campaign.status : "UNKNOWN";
     var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
     var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
-    
     var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
-    
     sheet.appendRow([campaignName, campaignStatus, 'Сегодня', impressions, clicks, cost]);
   }
 
-  // Все время
   var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign";
   var rowsTotal = AdsApp.search(queryTotal);
   while (rowsTotal.hasNext()) {
     var row = rowsTotal.next();
-    
     var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
     var campaignStatus = (row.campaign && row.campaign.status) ? row.campaign.status : "UNKNOWN";
     var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
     var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
     var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
-    
     sheet.appendRow([campaignName, campaignStatus, 'Все время', impressions, clicks, cost]);
   }
 }
@@ -1088,29 +1048,16 @@ function exportSearchTermsToday(spreadsheet) {
   var rows = AdsApp.search(query);
   while (rows.hasNext()) {
     var row = rows.next();
-    
     var searchTerm = (row.searchTermView && row.searchTermView.searchTerm) ? row.searchTermView.searchTerm : "Скрыто Google";
     var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
     var adGroupName = (row.adGroup && row.adGroup.name) ? row.adGroup.name : "Неизвестная_группа";
-    
     var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
     var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
     var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
-    
-    sheet.appendRow([
-      searchTerm,
-      campaignName,
-      adGroupName,
-      impressions,
-      clicks,
-      cost
-    ]);
+    sheet.appendRow([searchTerm, campaignName, adGroupName, impressions, clicks, cost]);
   }
 }
 
-// =======================================================
-// ОБЩИЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-// =======================================================
 function getOrCreateSheet(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) {
@@ -1136,9 +1083,7 @@ function getOrCreateSpreadsheet(accountName, accountId) {
   var spreadsheet = SpreadsheetApp.create('Google Ads Data - ' + accountName + ' (' + accountId + ')');
   sheetId = spreadsheet.getId();
   props.setProperty('SHEET_ID', sheetId);
-
   DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  
   return spreadsheet;
 }
 `;
@@ -1403,28 +1348,148 @@ function ensureSharing(sheetId, props) {
   }
 }`;
 
-        const App = () => {
+        // --- MAIN DASHBOARD ---
+        const Dashboard = () => {
             const { useState, useEffect, useRef } = React;
             const [campaigns, setCampaigns] = useState(mockCampaignsData);
             const [isLoading, setIsLoading] = useState(true);
             const [searchFilter, setSearchFilter] = useState('');
+            const [analyticsOpen, setAnalyticsOpen] = useState(false);
+            const [analyticsText, setAnalyticsText] = useState('');
+            const [analyticsLoading, setAnalyticsLoading] = useState(false);
+            const [analyticsError, setAnalyticsError] = useState('');
+            const [analyticsGeneratedAt, setAnalyticsGeneratedAt] = useState('');
+            const [analyticsMode, setAnalyticsMode] = useState('today');
+            const [analyticsViewDate, setAnalyticsViewDate] = useState('');
+            const [analyticsFiles, setAnalyticsFiles] = useState([]);
+            const [analyticsPickerOpen, setAnalyticsPickerOpen] = useState(false);
+
+            const fmtDateRu = (iso) => {
+                if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || '';
+                const [y, m, d] = iso.split('-');
+                return `${d}.${m}.${y}`;
+            };
+
+            const fetchAnalyticsFilesList = async () => {
+                try {
+                    const r = await fetch('/api/traffic-admin/today-analytics/list', { cache: 'no-store' });
+                    if (!r.ok) return;
+                    const j = await r.json();
+                    setAnalyticsFiles(Array.isArray(j.files) ? j.files : []);
+                } catch (e) { /* silent */ }
+            };
+
+            const loadLiveAnalytics = async (mode = 'today') => {
+                setAnalyticsMode(mode);
+                setAnalyticsViewDate('');
+                setAnalyticsLoading(true);
+                setAnalyticsError('');
+                setAnalyticsText('');
+                try {
+                    const r = await fetch(`/api/traffic-admin/today-analytics?mode=${mode}`, { cache: 'no-store' });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const j = await r.json();
+                    setAnalyticsText(j.text || '');
+                    setAnalyticsGeneratedAt(j.generatedAt || '');
+                } catch (e) {
+                    setAnalyticsError(e.message || 'Ошибка');
+                } finally {
+                    setAnalyticsLoading(false);
+                }
+            };
+
+            const loadSavedAnalytics = async (date) => {
+                if (!date) return;
+                setAnalyticsMode('saved');
+                setAnalyticsViewDate(date);
+                setAnalyticsLoading(true);
+                setAnalyticsError('');
+                setAnalyticsText('');
+                try {
+                    const r = await fetch(`/api/traffic-admin/today-analytics/file?date=${encodeURIComponent(date)}`, { cache: 'no-store' });
+                    if (!r.ok) {
+                        let msg = 'HTTP ' + r.status;
+                        try { const e = await r.json(); if (e && e.error) msg = e.error; } catch {}
+                        throw new Error(msg);
+                    }
+                    const j = await r.json();
+                    setAnalyticsText(j.text || '');
+                    setAnalyticsGeneratedAt(j.mtime ? new Date(j.mtime).toISOString() : '');
+                } catch (e) {
+                    setAnalyticsError(e.message || 'Ошибка');
+                } finally {
+                    setAnalyticsLoading(false);
+                }
+            };
+
+            const openAnalytics = async () => {
+                const mode = showYesterday ? 'yesterday' : 'today';
+                setAnalyticsOpen(true);
+                fetchAnalyticsFilesList();
+                await loadLiveAnalytics(mode);
+            };
+
+            const refreshAnalytics = async () => {
+                if (analyticsMode === 'saved' && analyticsViewDate) {
+                    await loadSavedAnalytics(analyticsViewDate);
+                } else {
+                    await loadLiveAnalytics(analyticsMode);
+                }
+                fetchAnalyticsFilesList();
+            };
+
+            const pickAnalyticsItem = async (item) => {
+                setAnalyticsPickerOpen(false);
+                if (!item) return;
+                if (item.kind === 'live-today') return loadLiveAnalytics('today');
+                if (item.kind === 'live-yesterday') return loadLiveAnalytics('yesterday');
+                if (item.kind === 'saved' && item.date) return loadSavedAnalytics(item.date);
+            };
+
+            const analyticsButtonLabel = (() => {
+                if (analyticsMode === 'saved' && analyticsViewDate) return fmtDateRu(analyticsViewDate);
+                if (analyticsMode === 'yesterday') return 'Вчера';
+                return 'Сегодня (LIVE)';
+            })();
+
+            const downloadAnalytics = () => {
+                if (!analyticsText) return;
+                const blob = new Blob([analyticsText], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const pad = n => String(n).padStart(2, '0');
+                let fileName;
+                if (analyticsMode === 'saved' && analyticsViewDate) {
+                    fileName = `today_analytics_${analyticsViewDate}.txt`;
+                } else {
+                    const d = new Date();
+                    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+                    const prefix = analyticsMode === 'yesterday' ? 'yesterday_analytics' : 'today_analytics';
+                    fileName = `${prefix}_${stamp}.txt`;
+                }
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            };
             const allStatusKeys = CUSTOM_STATUSES.map(s => s.key);
             const [statusFilter, setStatusFilter] = useState(() => {
-                try { const v = JSON.parse(localStorage.getItem('statusFilter_stats')); if (Array.isArray(v)) return v; } catch {}
+                try { const v = JSON.parse(localStorage.getItem('statusFilter_admin')); if (Array.isArray(v)) return v; } catch {}
                 return allStatusKeys;
             });
             const [showStatusFilter, setShowStatusFilter] = useState(false);
             const toggleStatusFilter = (key) => {
                 setStatusFilter(prev => {
                     const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
-                    localStorage.setItem('statusFilter_stats', JSON.stringify(next));
+                    localStorage.setItem('statusFilter_admin', JSON.stringify(next));
                     return next;
                 });
             };
             const [lastCheckedAt, setLastCheckedAt] = useState(null);
             const [lastSyncTime, setLastSyncTime] = useState(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
 
-            // Modal State
             const [isAddModalOpen, setIsAddModalOpen] = useState(false);
             const [newCampName, setNewCampName] = useState('');
             const [newCampUrl, setNewCampUrl] = useState('');
@@ -1439,15 +1504,13 @@ function ensureSharing(sheetId, props) {
             const [snapshotAt, setSnapshotAt] = useState(null);
             const isSnapshotMode = useRef(false);
 
-            // Sync State
             const currentDataVersion = useRef(0);
-            const currentTrafficDataVersion = useRef(0);
+            const currentAdminDataVersion = useRef(0);
             const isFetching = useRef(false);
             const configOrder = useRef([]);
-            const impressionHistory = useRef({});  // { campName: [imp1, imp2, imp3, imp4] }
+            const impressionHistory = useRef({});
             const mutationVersion = useRef(0);
 
-            // Drag and Drop — refs-only approach (no async, no setTimeout)
             const [draggedItemIndex, setDraggedItemIndex] = useState(null);
             const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
             const dragRef = useRef({ dragging: false, startIdx: null });
@@ -1525,7 +1588,7 @@ function ensureSharing(sheetId, props) {
 
                     const payload = JSON.stringify({ names: newOrder });
 
-                    fetch('/api/traffic/reorder', {
+                    fetch('/api/traffic-admin/reorder', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: payload,
@@ -1546,6 +1609,7 @@ function ensureSharing(sheetId, props) {
                 document.addEventListener('mouseup', handleMouseUp);
                 return () => document.removeEventListener('mouseup', handleMouseUp);
             }, []);
+
             const [isGlobalRefreshing, setIsGlobalRefreshing] = useState(false);
 
             const handleShowYesterday = async () => {
@@ -1563,7 +1627,7 @@ function ensureSharing(sheetId, props) {
 
             const handleSingleCampaignRefresh = async (campaignName) => {
                 try {
-                    const res = await fetch(`/api/traffic/${encodeURIComponent(campaignName)}/refresh`, { method: 'POST' });
+                    const res = await fetch(`/api/traffic-admin/${encodeURIComponent(campaignName)}/refresh`, { method: 'POST' });
                     if (!res.ok) {
                         const errBody = await res.json().catch(() => ({ error: 'Unknown error' }));
                         console.error('Single campaign refresh failed', errBody);
@@ -1577,9 +1641,9 @@ function ensureSharing(sheetId, props) {
             const handleGlobalRefresh = async () => {
                 if (isGlobalRefreshing) return;
                 setIsGlobalRefreshing(true);
-                const startVersion = currentTrafficDataVersion.current;
+                const startVersion = currentAdminDataVersion.current;
                 try {
-                    await fetch('/api/traffic/refresh', { method: 'POST' });
+                    await fetch('/api/traffic-admin/refresh', { method: 'POST' });
                 } catch (e) {
                     console.error("Global refresh trigger failed", e);
                     setIsGlobalRefreshing(false);
@@ -1592,7 +1656,7 @@ function ensureSharing(sheetId, props) {
                         const r = await fetch('/api/status');
                         if (r.ok) {
                             const s = await r.json();
-                            if ((s.traffic_data || 0) > startVersion) {
+                            if ((s.traffic_admin_data || 0) > startVersion) {
                                 clearInterval(waitInterval);
                                 setIsGlobalRefreshing(false);
                                 return;
@@ -1614,13 +1678,13 @@ function ensureSharing(sheetId, props) {
                 try {
                     let configs = [];
                     try {
-                        const confRes = await fetch('/api/traffic');
+                        const confRes = await fetch('/api/traffic-admin');
                         if (confRes.ok) {
                             configs = await confRes.json();
                             configOrder.current = configs.map(c => c.name);
                         }
                     } catch (e) {
-                        console.error("Failed to fetch traffic config from API:", e);
+                        console.error("Failed to fetch traffic-admin config from API:", e);
                     }
 
                     if (!configs || configs.length === 0) {
@@ -1632,9 +1696,8 @@ function ensureSharing(sheetId, props) {
 
                     let allCampaignsMap = {};
 
-                    // 1. Fetch from our Node background cache (or snapshot)
                     try {
-                        const endpoint = snapshotMode ? '/api/traffic-data-snapshot' : '/api/traffic-data';
+                        const endpoint = snapshotMode ? '/api/traffic-admin-data-snapshot' : '/api/traffic-admin-data';
                         const res = await fetch(endpoint);
                         if (res.ok) {
                             const json = await res.json();
@@ -1653,19 +1716,6 @@ function ensureSharing(sheetId, props) {
                         console.error("Error fetching traffic data:", err);
                     }
 
-                    // 2. Fetch Chessboard status
-                    let gridStatusMap = {};
-                    try {
-                        const cbRes = await fetch('/api/chessboard');
-                        if (cbRes.ok) {
-                            const cbData = await cbRes.json();
-                            cbData.forEach(c => {
-                                gridStatusMap[c.name] = c.status;
-                            });
-                        }
-                    } catch (e) { }
-
-                    // 3. Transform and map (only show campaigns that exist in config)
                     const configNames = new Set(configs.map(c => c.name));
                     const finalData = [];
                     const seenConfigs = new Set();
@@ -1707,7 +1757,6 @@ function ensureSharing(sheetId, props) {
                         });
                     }
                     
-                    // Add any configs that didn't yield campaigns (e.g. pending setup or script failure)
                     for (const config of configs) {
                         if (!seenConfigs.has(config.name)) {
                             finalData.push({
@@ -1731,7 +1780,6 @@ function ensureSharing(sheetId, props) {
                         }
                     }
                     
-                    // Sort campaigns strictly by the order saved in the backend configuration
                     finalData.sort((a, b) => {
                         let aIdx = configOrder.current.indexOf(a.customName); 
                         let bIdx = configOrder.current.indexOf(b.customName); 
@@ -1740,18 +1788,16 @@ function ensureSharing(sheetId, props) {
                         return aIdx - bIdx;
                     });
 
-                    // 4. Guard: if a local mutation (reorder/comment) happened during fetch, discard stale results
                     if (mutationVersion.current !== fetchMutation) {
                         return;
                     }
 
-                    // 5. Record new version from Status
                     try {
                         const statusRes = await fetch('/api/status');
                         if (statusRes.ok) {
                             const statuses = await statusRes.json();
-                            currentDataVersion.current = statuses.traffic;
-                            currentTrafficDataVersion.current = statuses.traffic_data || 0;
+                            currentDataVersion.current = statuses.traffic_admin;
+                            currentAdminDataVersion.current = statuses.traffic_admin_data || 0;
                         }
                     } catch (e) { }
 
@@ -1767,7 +1813,6 @@ function ensureSharing(sheetId, props) {
                 }
             };
 
-            // Initiate fetch on mount and setup polling
             useEffect(() => {
                 fetchDashboardData();
 
@@ -1778,48 +1823,36 @@ function ensureSharing(sheetId, props) {
                         if (!statusRes.ok) return;
                         const statuses = await statusRes.json();
 
-                        if (statuses.traffic > currentDataVersion.current) {
-                            console.log("Traffic Config changed on server, refreshing...");
+                        if (statuses.traffic_admin > currentDataVersion.current) {
+                            console.log("Traffic Admin Config changed on server, refreshing...");
                             fetchDashboardData();
                             return;
                         }
 
-                        if ((statuses.traffic_data || 0) > currentTrafficDataVersion.current) {
-                            console.log("Traffic Data refreshed on server, syncing...");
-                            fetchDashboardData();
-                            return;
-                        }
-
-                        if (statuses.chessboard > currentDataVersion.current) {
+                        if ((statuses.traffic_admin_data || 0) > currentAdminDataVersion.current) {
+                            console.log("Traffic Admin Data refreshed on server, syncing...");
                             fetchDashboardData();
                         }
-                    } catch (e) { /* ignore offline errors */ }
-                }, 3000); // Check every 3 seconds for near-realtime sync across tabs
+                    } catch (e) { }
+                }, 3000);
 
                 return () => clearInterval(interval);
             }, []);
 
-            // Fetch Grid Campaigns formatting them as "Name (Tag)"
             useEffect(() => {
                 const fetchCampaigns = async () => {
                     if (!isAddModalOpen) return;
 
                     try {
-                        console.log("Fetching campaigns from API...");
                         const res = await fetch('/api/chessboard');
                         if (res.ok) {
                             const gridData = await res.json();
                             const active = gridData.filter(c => c.status !== 'archive' && c.status !== 'delete');
                             const formatted = active.map(c => c.desc ? `${c.name} (${c.desc})` : c.name);
-                            console.log("Fetched campaigns:", formatted.length);
                             setGridCampaigns(formatted);
-                        } else {
-                            console.error("Failed API response:", res.status);
                         }
                     } catch (e) {
                         console.error('Failed to load grid campaigns API:', e);
-
-                        // Fallback to localStorage just in case
                         try {
                             const raw = localStorage.getItem('traffic_grid_v1');
                             if (raw) {
@@ -1853,6 +1886,7 @@ function ensureSharing(sheetId, props) {
                     setCopiedNew(true);
                     setTimeout(() => setCopiedNew(false), 2000);
                 } catch (err) {
+                    console.error('Failed to copy text: ', err);
                 }
             };
 
@@ -1874,18 +1908,15 @@ function ensureSharing(sheetId, props) {
                 }
 
                 try {
-                    // 1. Get current config from backend
                     let existing = [];
-                    const confRes = await fetch('/api/traffic');
+                    const confRes = await fetch('/api/traffic-admin');
                     if (confRes.ok) {
                         existing = await confRes.json();
                     }
 
-                    // 2. Append new campaign link
                     existing.push({ name: newCampName, url: newCampUrl, siteUrl: newCampSiteUrl || '', addedAt: new Date().toISOString() });
 
-                    // 3. Save back to backend
-                    const saveRes = await fetch(`/api/traffic?version=${currentDataVersion.current}`, {
+                    const saveRes = await fetch(`/api/traffic-admin?version=${currentDataVersion.current}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(existing)
@@ -1903,12 +1934,16 @@ function ensureSharing(sheetId, props) {
                     setNewCampUrl('');
                     setNewCampSiteUrl('');
 
-                    // Fetch data immediately
                     fetchDashboardData();
                 } catch (err) {
                     console.error('Error saving link:', err);
                     alert('Ошибка при сохранении на сервер');
                 }
+            };
+
+            const handleLogout = () => {
+                sessionStorage.removeItem(AUTH_KEY);
+                window.location.reload();
             };
 
             const filteredCampaigns = (() => {
@@ -1925,28 +1960,32 @@ function ensureSharing(sheetId, props) {
 
             return (
                 <div className="flex flex-col h-full bg-black">
-                    {/* Header */}
                     <header className="min-h-[3.5rem] py-2 border-b border-zinc-800 flex flex-wrap items-center justify-between px-6 gap-y-3 bg-zinc-950 flex-shrink-0 z-30 w-full overflow-visible relative">
                         <div className="flex flex-wrap items-center gap-y-2">
-                            <i className="fas fa-chart-bar text-blue-500 mr-3"></i>
-                            <h1 className="text-xs sm:text-sm font-bold tracking-[0.2em] text-zinc-300 mr-2 sm:mr-3">TRAFFIC_STATS</h1>
+                            <i className="fas fa-cogs text-purple-500 mr-3"></i>
+                            <h1 className="text-xs sm:text-sm font-bold tracking-[0.2em] text-zinc-300 mr-2 sm:mr-3">TRAFFIC_ADMIN</h1>
                             <span className="text-[10px] text-zinc-600 font-mono mr-4 sm:mr-6 self-end mb-[1px]">v1.2</span>
                             {isSavingOrder && <span className="text-[10px] text-yellow-400 animate-pulse mr-3"><i className="fas fa-circle-notch fa-spin mr-1"></i>Сохранение...</span>}
 
-                            {/* TAB SWITCHER */}
                             <div className="bg-zinc-800/50 p-1 rounded-lg flex items-center gap-1">
-                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
+                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
                                     <i className="fas fa-chart-bar mr-1.5"></i> Traffic Stats
                                 </a>
-                                <a href="/traffic-admin.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
+                                <a href="/traffic-admin.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
                                     <i className="fas fa-cogs mr-1.5"></i> Traffic Admin
                                 </a>
                             </div>
                         </div>
 
-                        {/* Actions */}
                         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-                            {/* Quick Search */}
+                            <button
+                                type="button"
+                                onClick={openAnalytics}
+                                title="Аналитика за сегодня (live-кампании)"
+                                className="px-2 py-1.5 rounded border border-zinc-800 text-zinc-400 hover:text-purple-400 hover:border-purple-500 bg-zinc-900 transition-colors flex items-center gap-1.5 text-xs">
+                                <i className="fas fa-chart-bar text-[11px]"></i>
+                                <span className="hidden sm:inline">Аналитика</span>
+                            </button>
                             <div className="relative flex-1 sm:flex-none">
                                 <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-zinc-600 text-xs"></i>
                                 <input
@@ -2000,14 +2039,19 @@ function ensureSharing(sheetId, props) {
                                 <i className="fas fa-plus mix-blend-overlay"></i>
                                 ДОБАВИТЬ КАМПАНИЮ
                             </button>
+                            <button
+                                onClick={handleLogout}
+                                className="text-zinc-500 hover:text-red-400 px-2 py-1.5 text-xs transition-colors flex items-center gap-1.5"
+                                title="Выйти из админки"
+                            >
+                                <i className="fas fa-sign-out-alt"></i>
+                            </button>
                         </div>
                     </header>
 
-                    {/* Main Table Area */}
                     <main className="flex-1 overflow-hidden flex flex-col bg-[#0c0c0e]">
-                        {/* Table Headers */}
                         <div className="flex items-center p-3 border-b border-zinc-800 bg-zinc-950 text-[10px] uppercase tracking-widest text-zinc-500 font-bold sticky top-0 z-20 shadow-sm">
-                            <div className="w-8 flex-shrink-0"></div> {/* Spacer for chevron */}
+                            <div className="w-8 flex-shrink-0"></div>
                             <div className="flex-1 flex items-center gap-2">
                                 Название кампании
                                 <button onClick={handleGlobalRefresh} className={`hover:text-purple-400 transition-colors ${isGlobalRefreshing ? 'animate-spin text-blue-400' : 'text-zinc-600'}`} title="Принудительно обновить все таблицы">
@@ -2026,7 +2070,6 @@ function ensureSharing(sheetId, props) {
                             <div className="w-56 flex-shrink-0 pl-4 border-l border-zinc-800/0">Данные за все время</div>
                         </div>
 
-                        {/* Yesterday / Current toggle bar */}
                         {showYesterday && (
                             <div className="flex items-center gap-3 px-4 py-2 bg-amber-950/30 border-b border-amber-800/30 text-xs">
                                 <i className="fas fa-history text-amber-400"></i>
@@ -2040,7 +2083,6 @@ function ensureSharing(sheetId, props) {
                             </div>
                         )}
 
-                        {/* List */}
                         <div className="flex-1 overflow-y-auto custom-scrollbar pb-10">
                             {filteredCampaigns.length === 0 ? (
                                 <div className="p-10 text-center text-zinc-600 text-xs uppercase tracking-widest flex flex-col items-center gap-2">
@@ -2064,11 +2106,9 @@ function ensureSharing(sheetId, props) {
                         </div>
                     </main>
 
-                    {/* Add Campaign Modal */}
                     {isAddModalOpen && (
                         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4">
                             <div className="bg-zinc-950 border border-zinc-700/50 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                                {/* Modal Header */}
                                 <div className="px-6 py-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
                                     <div className="flex items-center gap-3">
                                         <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
@@ -2087,17 +2127,14 @@ function ensureSharing(sheetId, props) {
                                     </button>
                                 </div>
 
-                                {/* Modal Content - Scrollable */}
                                 <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-
-                                    {/* Step 1: Instructions & Script */}
                                     <div className="mb-8">
                                         <div className="flex items-center gap-2 mb-3">
                                             <span className="bg-purple-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">1</span>
                                             <h3 className="text-sm font-bold text-zinc-200">Скрипт Google Ads</h3>
                                         </div>
                                         <p className="text-xs text-zinc-400 mb-3 ml-7">
-                                            Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads. Он автоматически создаст Google Таблицу со статистикой.
+                                            Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads.
                                         </p>
                                         <div className="ml-7 relative group">
                                             <div className="absolute right-2 top-2 z-10 flex gap-2">
@@ -2129,7 +2166,6 @@ function ensureSharing(sheetId, props) {
                                         </div>
                                     </div>
 
-                                    {/* Step 2: Linking Form */}
                                     <div>
                                         <div className="flex items-center gap-2 mb-4">
                                             <span className="bg-purple-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">2</span>
@@ -2233,7 +2269,6 @@ function ensureSharing(sheetId, props) {
                         </div>
                     )}
 
-                    {/* Status Footer */}
                     <footer className="h-8 border-t border-zinc-800 bg-zinc-950 flex items-center justify-between px-4 z-10 text-[10px] text-zinc-500">
                         <div className="flex items-center gap-4">
                             <div>
@@ -2261,10 +2296,131 @@ function ensureSharing(sheetId, props) {
                                 );
                             })()}
                             <span className="uppercase tracking-widest">Кампаний: {filteredCampaigns.length}</span>
+                            <span className="uppercase tracking-widest text-purple-400/60"><i className="fas fa-shield-alt mr-1"></i>ADMIN</span>
                         </div>
                     </footer>
+
+                    {analyticsOpen && (
+                        <div className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4" onClick={() => setAnalyticsOpen(false)}>
+                            <div className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <i className="fas fa-chart-bar text-purple-400"></i>
+                                        <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider">{
+                                            analyticsMode === 'saved' ? 'Аналитика (сохранённая)'
+                                            : analyticsMode === 'yesterday' ? 'Аналитика за вчера'
+                                            : 'Аналитика за сегодня'
+                                        }</h3>
+                                        {analyticsGeneratedAt && (
+                                            <span className="text-[10px] text-zinc-500">
+                                                {analyticsMode === 'saved' ? 'снимок: ' : 'сформировано: '}
+                                                {new Date(analyticsGeneratedAt).toLocaleString('ru-RU')}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-2 relative">
+                                        <div className="relative">
+                                            <button
+                                                type="button"
+                                                onClick={() => { if (!analyticsPickerOpen) fetchAnalyticsFilesList(); setAnalyticsPickerOpen(v => !v); }}
+                                                title="Выбрать дату аналитики"
+                                                className="px-2.5 py-1 rounded border border-zinc-700 text-zinc-300 hover:text-purple-400 hover:border-purple-500 transition-colors text-xs flex items-center gap-1.5">
+                                                <i className="far fa-calendar-alt"></i>
+                                                <span>{analyticsButtonLabel}</span>
+                                                <i className={`fas fa-chevron-down text-[9px] transition-transform ${analyticsPickerOpen ? 'rotate-180' : ''}`}></i>
+                                            </button>
+                                            {analyticsPickerOpen && (
+                                                <div className="absolute top-9 right-0 z-[110] bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl py-1 w-60 max-h-[60vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => pickAnalyticsItem({ kind: 'live-today' })}
+                                                        className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-800 transition-colors ${analyticsMode === 'today' ? 'text-purple-400 bg-zinc-800/60' : 'text-zinc-300'}`}>
+                                                        <i className="fas fa-bolt text-[10px] w-3"></i>
+                                                        <span>Сегодня (LIVE)</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => pickAnalyticsItem({ kind: 'live-yesterday' })}
+                                                        className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-800 transition-colors ${analyticsMode === 'yesterday' ? 'text-purple-400 bg-zinc-800/60' : 'text-zinc-300'}`}>
+                                                        <i className="far fa-clock text-[10px] w-3"></i>
+                                                        <span>Вчера (snapshot)</span>
+                                                    </button>
+                                                    <div className="border-t border-zinc-800 my-1"></div>
+                                                    <div className="px-3 py-1 text-[9px] uppercase tracking-wider text-zinc-500">Сохранённые</div>
+                                                    {analyticsFiles.length === 0 && (
+                                                        <div className="px-3 py-2 text-[11px] text-zinc-500 italic">Нет сохранённых файлов</div>
+                                                    )}
+                                                    {analyticsFiles.map(f => (
+                                                        <button
+                                                            key={f.date}
+                                                            type="button"
+                                                            onClick={() => pickAnalyticsItem({ kind: 'saved', date: f.date })}
+                                                            className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between gap-2 hover:bg-zinc-800 transition-colors ${analyticsMode === 'saved' && analyticsViewDate === f.date ? 'text-purple-400 bg-zinc-800/60' : 'text-zinc-300'}`}>
+                                                            <span className="flex items-center gap-2">
+                                                                <i className="far fa-file-alt text-[10px] w-3"></i>
+                                                                <span className="font-mono">{fmtDateRu(f.date)}</span>
+                                                            </span>
+                                                            <span className="text-[9px] text-zinc-500">{Math.round((f.size || 0) / 1024)} KB</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={refreshAnalytics}
+                                            disabled={analyticsLoading}
+                                            title="Обновить"
+                                            className="px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-purple-400 hover:border-purple-500 transition-colors text-xs disabled:opacity-50">
+                                            <i className={`fas fa-sync-alt ${analyticsLoading ? 'fa-spin' : ''}`}></i>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={downloadAnalytics}
+                                            disabled={!analyticsText || analyticsLoading}
+                                            title="Скачать .txt"
+                                            className="px-2.5 py-1 rounded border border-zinc-700 text-zinc-300 hover:text-green-400 hover:border-green-500 transition-colors text-xs flex items-center gap-1.5 disabled:opacity-50">
+                                            <i className="fas fa-download"></i>
+                                            <span>Скачать .txt</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAnalyticsOpen(false)}
+                                            title="Закрыть"
+                                            className="px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-500 transition-colors text-xs">
+                                            <i className="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-auto p-4">
+                                    {analyticsLoading && (
+                                        <div className="flex items-center justify-center py-10 text-zinc-500 text-sm">
+                                            <i className="fas fa-spinner fa-spin mr-2"></i> Собираем данные...
+                                        </div>
+                                    )}
+                                    {analyticsError && !analyticsLoading && (
+                                        <div className="text-red-400 text-sm">Ошибка: {analyticsError}</div>
+                                    )}
+                                    {!analyticsLoading && !analyticsError && (
+                                        <pre className="text-[11px] text-zinc-200 font-mono whitespace-pre leading-snug">{analyticsText}</pre>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
+        };
+
+        // --- ROOT APP WITH AUTH ---
+        const App = () => {
+            const [isAuthed, setIsAuthed] = useState(() => sessionStorage.getItem(AUTH_KEY) === '1');
+
+            if (!isAuthed) {
+                return <PasswordGate onAuth={() => setIsAuthed(true)} />;
+            }
+
+            return <Dashboard />;
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
