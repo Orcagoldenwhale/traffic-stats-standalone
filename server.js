@@ -1520,18 +1520,12 @@ async function refreshTrafficData(options = {}) {
 
         for (const config of targetConfigs) {
             if (config.customStatus === 'ban') {
-                // Ban не показывается в UI — чистим все его записи из кэша
-                for (const key of Object.keys(allCampaignsMap)) {
-                    if (allCampaignsMap[key] && allCampaignsMap[key].customName === config.name) {
-                        delete allCampaignsMap[key];
-                    }
-                }
                 continue;
             }
             try {
                 const { url, name: customName } = config;
                 if (!url) continue;
-                
+
                 const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
                 if (!match) continue;
                 const sheetId = match[1];
@@ -1856,12 +1850,6 @@ async function refreshTrafficAdminData(options = {}) {
         const rates = await getExchangeRates();
         for (const config of targetConfigs) {
             if (config.customStatus === 'ban') {
-                // Ban не показывается в UI — чистим все его записи из кэша
-                for (const key of Object.keys(allCampaignsMap)) {
-                    if (allCampaignsMap[key] && allCampaignsMap[key].customName === config.name) {
-                        delete allCampaignsMap[key];
-                    }
-                }
                 continue;
             }
             try {
