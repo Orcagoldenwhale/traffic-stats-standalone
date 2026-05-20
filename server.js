@@ -129,13 +129,15 @@ async function checkCostAlerts(configs, allCampaignsMap, source) {
             if (camp.customName !== config.name) continue;
             const cost = camp.stats?.allTime?.cost || 0;
             if (cost >= threshold) {
+                const note = (config.costAlertNote || '').trim();
                 await sendTelegramAlert(
                     `🔔 <b>Превышение расходов!</b>\n\n` +
                     `📊 ${source === 'admin' ? 'Traffic Admin' : 'Traffic Stats'}\n` +
                     `🏷 <b>${config.name}</b> → ${camp.name}\n` +
                     `💰 Расходы: <b>$${cost.toFixed(2)}</b>\n` +
-                    `⚠️ Лимит: $${threshold.toFixed(2)}\n\n` +
-                    `Отключите будильник чтобы остановить.`
+                    `⚠️ Лимит: $${threshold.toFixed(2)}\n` +
+                    (note ? `📝 ${note}\n` : '') +
+                    `\nОтключите будильник чтобы остановить.`
                 );
             }
         }
@@ -595,7 +597,7 @@ app.delete('/api/traffic/:name', async (req, res) => {
 app.patch('/api/traffic/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -661,13 +663,15 @@ app.patch('/api/traffic/:name', async (req, res) => {
                         if (camp.customName !== campaignToUpdate) continue;
                         const cost = camp.stats?.allTime?.cost || 0;
                         if (cost >= threshold) {
+                            const note = (updates.costAlertNote !== undefined ? updates.costAlertNote : (camp.costAlertNote || '')).trim();
                             sendTelegramAlert(
                                 `🔔 <b>Превышение расходов!</b>\n\n` +
                                 `📊 Traffic Stats\n` +
                                 `🏷 <b>${campaignToUpdate}</b> → ${camp.name}\n` +
                                 `💰 Расходы: <b>$${cost.toFixed(2)}</b>\n` +
-                                `⚠️ Лимит: $${threshold.toFixed(2)}\n\n` +
-                                `Будильник активирован — условие уже выполнено!`
+                                `⚠️ Лимит: $${threshold.toFixed(2)}\n` +
+                                (note ? `📝 ${note}\n` : '') +
+                                `\nБудильник активирован — условие уже выполнено!`
                             );
                         }
                     }
@@ -892,7 +896,7 @@ app.delete('/api/traffic-admin/:name', async (req, res) => {
 app.patch('/api/traffic-admin/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -956,13 +960,15 @@ app.patch('/api/traffic-admin/:name', async (req, res) => {
                         if (camp.customName !== campaignToUpdate) continue;
                         const cost = camp.stats?.allTime?.cost || 0;
                         if (cost >= threshold) {
+                            const note = (updates.costAlertNote !== undefined ? updates.costAlertNote : (camp.costAlertNote || '')).trim();
                             sendTelegramAlert(
                                 `🔔 <b>Превышение расходов!</b>\n\n` +
                                 `📊 Traffic Admin\n` +
                                 `🏷 <b>${campaignToUpdate}</b> → ${camp.name}\n` +
                                 `💰 Расходы: <b>$${cost.toFixed(2)}</b>\n` +
-                                `⚠️ Лимит: $${threshold.toFixed(2)}\n\n` +
-                                `Будильник активирован — условие уже выполнено!`
+                                `⚠️ Лимит: $${threshold.toFixed(2)}\n` +
+                                (note ? `📝 ${note}\n` : '') +
+                                `\nБудильник активирован — условие уже выполнено!`
                             );
                         }
                     }
@@ -1751,6 +1757,7 @@ async function refreshTrafficData(options = {}) {
                     camp.costAlert = config.costAlert || 0;
                     camp.campTask = config.campTask || '';
                     camp.campNote = config.campNote || '';
+                    camp.costAlertNote = config.costAlertNote || '';
                     camp.campTimer = config.campTimer || 0;
                     camp.primaryKeyword = config.primaryKeyword || '';
                     const globalKey = `${config.name}_${campName}`;
@@ -2032,6 +2039,7 @@ async function refreshTrafficAdminData(options = {}) {
                     camp.costAlert = config.costAlert || 0;
                     camp.campTask = config.campTask || '';
                     camp.campNote = config.campNote || '';
+                    camp.costAlertNote = config.costAlertNote || '';
                     camp.campTimer = config.campTimer || 0;
                     camp.primaryKeyword = config.primaryKeyword || '';
                     const globalKey = `${config.name}_${campName}`;

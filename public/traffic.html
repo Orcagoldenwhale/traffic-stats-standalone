@@ -142,6 +142,7 @@
             const [showAlertPopup, setShowAlertPopup] = useState(false);
             const [alertValue, setAlertValue] = useState(data.costAlert || '');
             const [costAlert, setCostAlert] = useState(data.costAlert || 0);
+            const [costAlertNote, setCostAlertNote] = useState(data.costAlertNote || '');
             const [campTask, setCampTask] = useState(data.campTask || '');
             const [showTaskPopup, setShowTaskPopup] = useState(false);
             const [taskInput, setTaskInput] = useState('');
@@ -157,18 +158,19 @@
                 try {
                     await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ costAlert: val }), keepalive: true
+                        body: JSON.stringify({ costAlert: val, costAlertNote }), keepalive: true
                     });
                 } catch (e) { console.error('Failed to save alert', e); }
             };
             const handleDisableAlert = async () => {
                 setCostAlert(0);
                 setAlertValue('');
+                setCostAlertNote('');
                 setShowAlertPopup(false);
                 try {
                     await fetch(`/api/traffic/${encodeURIComponent(data.customName)}`, {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ costAlert: 0 }), keepalive: true
+                        body: JSON.stringify({ costAlert: 0, costAlertNote: '' }), keepalive: true
                     });
                 } catch (e) { console.error('Failed to disable alert', e); }
             };
@@ -326,6 +328,18 @@
                 setCampNote(data.campNote || '');
                 lastSavedNote.current = data.campNote || '';
             }, [data.campNote]);
+
+            useEffect(() => {
+                if (data.costAlertNote === undefined) return;
+                if (showAlertPopup) return;
+                setCostAlertNote(data.costAlertNote || '');
+            }, [data.costAlertNote, showAlertPopup]);
+
+            useEffect(() => {
+                if (data.costAlert === undefined) return;
+                setCostAlert(data.costAlert || 0);
+                if (!showAlertPopup) setAlertValue(data.costAlert || '');
+            }, [data.costAlert, showAlertPopup]);
 
             const handleDelete = async (e) => {
                 e.stopPropagation();
@@ -668,7 +682,10 @@
                                                     placeholder="0.00" step="0.01" min="0"
                                                     className="flex-1 bg-zinc-800 border border-zinc-700 text-xs text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-yellow-500 transition-colors w-20" />
                                             </div>
-                                            <p className="text-[9px] text-zinc-600 mb-2">Telegram при расходах ≥ суммы</p>
+                                            <input type="text" value={costAlertNote} onChange={e => setCostAlertNote(e.target.value)}
+                                                placeholder="Заметка для Telegram-алерта..."
+                                                maxLength={200}
+                                                className="w-full bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-200 placeholder-zinc-600 px-2 py-1.5 rounded focus:outline-none focus:border-yellow-500 transition-colors mb-2" />
                                             <div className="flex gap-2">
                                                 <button onClick={handleSaveAlert}
                                                     className="flex-1 px-2 py-1 text-[10px] bg-yellow-600 hover:bg-yellow-500 text-white rounded font-bold transition-colors">
@@ -1770,6 +1787,7 @@ function ensureSharing(sheetId, props) {
                             costAlert: campData.costAlert || 0,
                             campTask: campData.campTask || '',
                             campNote: campData.campNote || '',
+                            costAlertNote: campData.costAlertNote || '',
                             campTimer: campData.campTimer || 0,
                             primaryKeyword: campData.primaryKeyword || '',
                             lastReadAt: campData.lastReadAt || null
@@ -1796,6 +1814,7 @@ function ensureSharing(sheetId, props) {
                                 addedAt: config.addedAt || '',
                                 costAlert: config.costAlert || 0,
                                 campNote: config.campNote || '',
+                                costAlertNote: config.costAlertNote || '',
                                 primaryKeyword: config.primaryKeyword || ''
                             });
                         }
