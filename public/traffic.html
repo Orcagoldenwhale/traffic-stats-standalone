@@ -277,10 +277,11 @@
             useEffect(() => () => { if (commentTimer.current) clearTimeout(commentTimer.current); }, []);
 
             useEffect(() => {
-                if (data.comment !== undefined && data.comment !== lastSavedComment.current) {
-                    setComment(data.comment || '');
-                    lastSavedComment.current = data.comment || '';
-                }
+                if (data.comment === undefined) return;
+                if (data.comment === lastSavedComment.current) return;
+                if (comment !== lastSavedComment.current) return;
+                setComment(data.comment || '');
+                lastSavedComment.current = data.comment || '';
             }, [data.comment]);
 
             const noteTimer = useRef(null);
@@ -319,10 +320,11 @@
             useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); }, []);
 
             useEffect(() => {
-                if (data.campNote !== undefined && data.campNote !== lastSavedNote.current) {
-                    setCampNote(data.campNote || '');
-                    lastSavedNote.current = data.campNote || '';
-                }
+                if (data.campNote === undefined) return;
+                if (data.campNote === lastSavedNote.current) return;
+                if (campNote !== lastSavedNote.current) return;
+                setCampNote(data.campNote || '');
+                lastSavedNote.current = data.campNote || '';
             }, [data.campNote]);
 
             const handleDelete = async (e) => {
