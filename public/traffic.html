@@ -2096,8 +2096,14 @@ function ensureSharing(sheetId, props) {
                                                                 <div className="flex-1 min-w-0">
                                                                     <div className="text-[11px] text-zinc-200 font-bold truncate flex items-center gap-1.5">
                                                                         <span className="truncate">{c.customName}</span>
-                                                                        {c.impressionsStale && !c.isStale && (
-                                                                            <i className="fas fa-exclamation-circle text-orange-400 text-[10px] flex-shrink-0" title="Показы не меняются"></i>
+                                                                        {c.campTimer > 0 && (Date.now() - c.campTimer) < 86400000 && (
+                                                                            <svg width="12" height="12" viewBox="0 0 20 20" className="flex-shrink-0">
+                                                                                <circle cx="10" cy="10" r="8" fill="none" stroke="#3f3f46" strokeWidth="3" />
+                                                                                <circle cx="10" cy="10" r="8" fill="none" stroke="#a78bfa" strokeWidth="3"
+                                                                                    strokeDasharray={`${Math.max(0, 1 - (Date.now() - c.campTimer) / 86400000) * 50.265} 50.265`}
+                                                                                    strokeLinecap="round"
+                                                                                    transform="rotate(-90 10 10)" />
+                                                                            </svg>
                                                                         )}
                                                                     </div>
                                                                     <div className="text-[10px] text-zinc-400 whitespace-pre-wrap mt-0.5 line-clamp-3">{c.campTask}</div>
