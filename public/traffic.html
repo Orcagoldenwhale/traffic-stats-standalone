@@ -1490,16 +1490,15 @@ function ensureSharing(sheetId, props) {
         const App = () => {
             const { useState, useEffect, useRef } = React;
 
-            // Hotkeys: Q → Traffic Stats, W → Traffic Admin
+            // Hotkeys: Q → Traffic Stats, W → Traffic Admin (works on any keyboard layout)
             useEffect(() => {
                 const handler = (e) => {
                     if (e.ctrlKey || e.metaKey || e.altKey) return;
                     const t = e.target;
                     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-                    const k = e.key.toLowerCase();
-                    if (k === 'q' && !location.pathname.startsWith('/traffic.html') && location.pathname !== '/') {
+                    if (e.code === 'KeyQ' && location.pathname !== '/traffic.html' && location.pathname !== '/') {
                         location.href = '/traffic.html';
-                    } else if (k === 'w' && !location.pathname.startsWith('/traffic-admin.html')) {
+                    } else if (e.code === 'KeyW' && location.pathname !== '/traffic-admin.html') {
                         location.href = '/traffic-admin.html';
                     }
                 };
@@ -2041,11 +2040,11 @@ function ensureSharing(sheetId, props) {
 
                             {/* TAB SWITCHER */}
                             <div className="bg-zinc-800/50 p-1 rounded-lg flex items-center gap-1">
-                                <a href="/traffic.html" title="Горячая клавиша: Q" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
-                                    <i className="fas fa-chart-bar mr-1.5"></i> Traffic Stats <kbd className="ml-1 px-1 py-[1px] text-[8px] bg-zinc-900/60 rounded border border-zinc-600">Q</kbd>
+                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
+                                    <i className="fas fa-chart-bar mr-1.5"></i> Traffic Stats
                                 </a>
-                                <a href="/traffic-admin.html" title="Горячая клавиша: W" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
-                                    <i className="fas fa-cogs mr-1.5"></i> Traffic Admin <kbd className="ml-1 px-1 py-[1px] text-[8px] bg-zinc-900/60 rounded border border-zinc-700">W</kbd>
+                                <a href="/traffic-admin.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
+                                    <i className="fas fa-cogs mr-1.5"></i> Traffic Admin
                                 </a>
                             </div>
                         </div>
