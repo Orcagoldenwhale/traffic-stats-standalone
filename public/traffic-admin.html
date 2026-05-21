@@ -1438,6 +1438,65 @@ function ensureSharing(sheetId, props) {
             const [campaigns, setCampaigns] = useState(mockCampaignsData);
             const [isLoading, setIsLoading] = useState(true);
             const [searchFilter, setSearchFilter] = useState('');
+            const [notesOpen, setNotesOpen] = useState(false);
+            const [notesText, setNotesText] = useState('');
+            const [notesUpdatedAt, setNotesUpdatedAt] = useState('');
+            const [notesLoading, setNotesLoading] = useState(false);
+            const [notesSaving, setNotesSaving] = useState(false);
+            const notesSaveTimer = useRef(null);
+            const lastSavedNotes = useRef('');
+
+            const fetchAdminNotes = useCallback(async () => {
+                setNotesLoading(true);
+                try {
+                    const r = await fetch('/api/traffic-admin/notes', { cache: 'no-store' });
+                    const j = await r.json();
+                    setNotesText(j.text || '');
+                    lastSavedNotes.current = j.text || '';
+                    setNotesUpdatedAt(j.updatedAt || '');
+                } catch (e) {
+                    console.error('Failed to load notes', e);
+                } finally {
+                    setNotesLoading(false);
+                }
+            }, []);
+
+            const saveAdminNotes = useCallback(async (val) => {
+                if (val === lastSavedNotes.current) return;
+                setNotesSaving(true);
+                try {
+                    const r = await fetch('/api/traffic-admin/notes', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: val }),
+                        keepalive: true
+                    });
+                    if (r.ok) {
+                        const j = await r.json();
+                        lastSavedNotes.current = val;
+                        if (j.updatedAt) setNotesUpdatedAt(j.updatedAt);
+                    }
+                } catch (e) {
+                    console.error('Failed to save notes', e);
+                } finally {
+                    setNotesSaving(false);
+                }
+            }, []);
+
+            const openNotes = useCallback(async () => {
+                setNotesOpen(true);
+                await fetchAdminNotes();
+            }, [fetchAdminNotes]);
+
+            const handleNotesChange = useCallback((e) => {
+                const val = e.target.value;
+                setNotesText(val);
+                if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current);
+                notesSaveTimer.current = setTimeout(() => saveAdminNotes(val), 800);
+            }, [saveAdminNotes]);
+
+            useEffect(() => () => { if (notesSaveTimer.current) clearTimeout(notesSaveTimer.current); }, []);
+
             const [analyticsOpen, setAnalyticsOpen] = useState(false);
             const [analyticsText, setAnalyticsText] = useState('');
             const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -2074,6 +2133,14 @@ function ensureSharing(sheetId, props) {
                                 <i className="fas fa-chart-bar text-[11px]"></i>
                                 <span className="hidden sm:inline">Аналитика</span>
                             </button>
+                            <button
+                                type="button"
+                                onClick={openNotes}
+                                title="Заметки и идеи"
+                                className="px-2 py-1.5 rounded border border-zinc-800 text-zinc-400 hover:text-yellow-400 hover:border-yellow-500 bg-zinc-900 transition-colors flex items-center gap-1.5 text-xs">
+                                <i className="fas fa-sticky-note text-[11px]"></i>
+                                <span className="hidden sm:inline">Заметки</span>
+                            </button>
                             <div className="relative flex-1 sm:flex-none">
                                 <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-zinc-600 text-xs"></i>
                                 <input
@@ -2491,6 +2558,50 @@ function ensureSharing(sheetId, props) {
                                     )}
                                     {!analyticsLoading && !analyticsError && (
                                         <pre className="text-[11px] text-zinc-200 font-mono whitespace-pre leading-snug">{analyticsText}</pre>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {notesOpen && (
+                        <div className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4" onClick={() => setNotesOpen(false)}>
+                            <div className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <i className="fas fa-sticky-note text-yellow-400"></i>
+                                        <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider">Заметки</h3>
+                                        {notesUpdatedAt && (
+                                            <span className="text-[10px] text-zinc-500">
+                                                обновлено: {new Date(notesUpdatedAt).toLocaleString('ru-RU')}
+                                            </span>
+                                        )}
+                                        {notesSaving && (
+                                            <span className="text-[10px] text-yellow-400 animate-pulse">
+                                                <i className="fas fa-circle-notch fa-spin mr-1"></i>сохраняется
+                                            </span>
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setNotesOpen(false)}
+                                        title="Закрыть"
+                                        className="px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-500 transition-colors text-xs">
+                                        <i className="fas fa-times"></i>
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-auto p-4">
+                                    {notesLoading ? (
+                                        <div className="flex items-center justify-center py-10 text-zinc-500 text-sm">
+                                            <i className="fas fa-spinner fa-spin mr-2"></i> Загрузка...
+                                        </div>
+                                    ) : (
+                                        <textarea
+                                            value={notesText}
+                                            onChange={handleNotesChange}
+                                            placeholder="Идеи, мысли, чек-листы..."
+                                            className="w-full h-[60vh] bg-zinc-950 border border-zinc-800 rounded p-3 text-[13px] text-zinc-200 font-mono leading-relaxed focus:outline-none focus:border-yellow-600 resize-none"
+                                        />
                                     )}
                                 </div>
                             </div>

@@ -15,6 +15,7 @@ const TRAFFIC_ADMIN_FILE = join(__dirname, 'saved_sessions', '_traffic_admin.jso
 const TRAFFIC_ADMIN_DATA_FILE = join(__dirname, 'saved_sessions', '_traffic_admin_data.json');
 const TRAFFIC_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_data_snapshot.json');
 const TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_admin_data_snapshot.json');
+const ADMIN_NOTES_FILE = join(__dirname, 'saved_sessions', '_admin_notes.json');
 
 // Ensure saved_sessions directory exists
 if (!existsSync(SESSIONS_DIR)) {
@@ -239,7 +240,7 @@ if (existsSync(DIST_DIR)) {
 app.use(express.static(PUBLIC_DIR));
 
 // --- Sync Timestamps ---
-let timestamps = { data: Date.now(), chessboard: Date.now(), assets: Date.now(), traffic: Date.now(), traffic_data: Date.now(), traffic_admin: Date.now(), traffic_admin_data: Date.now() };
+let timestamps = { data: Date.now(), chessboard: Date.now(), assets: Date.now(), traffic: Date.now(), traffic_data: Date.now(), traffic_admin: Date.now(), traffic_admin_data: Date.now(), admin_notes: Date.now() };
 
 app.get('/api/status', (req, res) => {
     res.json(timestamps);
@@ -1075,6 +1076,41 @@ app.post('/api/traffic-admin/refresh', async (req, res) => {
     auditLog('REFRESH', 'traffic_admin_data', 'manual', req);
     res.json({ success: true, started: true });
     refreshTrafficAdminData().catch(e => console.error('[Server] Manual admin refresh failed:', e.message));
+});
+
+app.get('/api/traffic-admin/notes', async (req, res) => {
+    try {
+        if (!existsSync(ADMIN_NOTES_FILE)) {
+            return res.json({ text: '', updatedAt: null });
+        }
+        const raw = await readFile(ADMIN_NOTES_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        res.json({ text: parsed.text || '', updatedAt: parsed.updatedAt || null });
+    } catch (e) {
+        console.error('[Server] Failed to read admin notes:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/traffic-admin/notes', async (req, res) => {
+    try {
+        const text = typeof req.body.text === 'string' ? req.body.text : '';
+        if (text.length > 500000) return res.status(400).json({ error: 'Text too long (max 500KB)' });
+        await withFileLock(ADMIN_NOTES_FILE, async () => {
+            if (existsSync(ADMIN_NOTES_FILE)) await createBackup(ADMIN_NOTES_FILE);
+            const payload = { text, updatedAt: new Date().toISOString() };
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = ADMIN_NOTES_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(payload), 'utf-8');
+            await rename(tmpFile, ADMIN_NOTES_FILE);
+            timestamps.admin_notes = Date.now();
+        });
+        auditLog('SAVE', 'admin_notes', `length=${text.length}`, req);
+        res.json({ ok: true, updatedAt: new Date().toISOString() });
+    } catch (e) {
+        console.error('[Server] Failed to save admin notes:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.get('/api/traffic-admin/today-analytics', async (req, res) => {
