@@ -1457,6 +1457,8 @@ function ensureSharing(sheetId, props) {
             const [isLoading, setIsLoading] = useState(true);
             const [searchFilter, setSearchFilter] = useState('');
             const [tasksOpen, setTasksOpen] = useState(false);
+            const [alertsOpen, setAlertsOpen] = useState(false);
+            const [activeAlerts, setActiveAlerts] = useState([]);
             const goToCampaign = (customName) => {
                 setTasksOpen(false);
                 setSearchFilter('');
@@ -1885,6 +1887,9 @@ function ensureSharing(sheetId, props) {
                             if (json.success !== false && json.data) {
                                 allCampaignsMap = json.data;
                                 if (snapshotMode) setSnapshotAt(json.snapshotAt || null);
+                                if (!snapshotMode) {
+                                    setActiveAlerts(Array.isArray(json.activeAlerts) ? json.activeAlerts : []);
+                                }
                             }
                         }
                     } catch (err) {
@@ -2174,13 +2179,70 @@ function ensureSharing(sheetId, props) {
                                 <span className="hidden sm:inline">Заметки</span>
                             </button>
                             {(() => {
+                                const alertsCount = activeAlerts.length;
+                                return (
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setAlertsOpen(v => !v); setTasksOpen(false); }}
+                                            title={`Уведомления (${alertsCount})`}
+                                            className={`px-2 py-1.5 rounded border transition-colors flex items-center gap-1.5 text-xs ${alertsOpen ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-zinc-800 text-zinc-400 hover:text-orange-400 hover:border-orange-500 bg-zinc-900'}`}>
+                                            <i className="fas fa-bell text-[11px]"></i>
+                                            {alertsCount > 0 && (
+                                                <span className="px-1.5 py-[1px] text-[9px] bg-orange-500/20 text-orange-300 rounded-full">{alertsCount}</span>
+                                            )}
+                                            <i className={`fas fa-chevron-down text-[9px] transition-transform ${alertsOpen ? 'rotate-180' : ''}`}></i>
+                                        </button>
+                                        {alertsOpen && (
+                                            <div className="absolute top-9 right-0 z-40 w-[360px] max-h-[60vh] overflow-y-auto bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+                                                {activeAlerts.length === 0 ? (
+                                                    <div className="p-3 text-center text-[10px] text-zinc-600 uppercase tracking-widest">
+                                                        Нет активных уведомлений
+                                                    </div>
+                                                ) : (
+                                                    <div className="divide-y divide-zinc-800/60">
+                                                        {activeAlerts.map((a, i) => (
+                                                            <div key={`${a.type}-${a.customName}-${i}`} className="flex items-start gap-2 px-3 py-2 hover:bg-zinc-800/40 transition-colors">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-[11px] text-zinc-200 font-bold truncate">{a.customName}</div>
+                                                                    {a.type === 'cost' ? (
+                                                                        <div className="text-[10px] mt-0.5">
+                                                                            <span className="text-orange-400">💰 ${a.cost.toFixed(2)} / ${a.threshold.toFixed(2)}</span>
+                                                                            {a.note && <div className="text-zinc-400 mt-0.5">{a.note}</div>}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="text-[10px] mt-0.5">
+                                                                            <span className="text-yellow-400">🔑 ключи &gt; ${a.threshold}: {a.offending.length} шт</span>
+                                                                            <div className="text-zinc-500 mt-0.5 line-clamp-2">
+                                                                                {a.offending.slice(0, 2).map(o => `«${o.kwText}» $${o.cost.toFixed(2)}`).join(' · ')}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => { setAlertsOpen(false); goToCampaign(a.customName); }}
+                                                                    className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-zinc-700 text-zinc-300 hover:text-orange-400 hover:border-orange-500 transition-colors flex items-center gap-1 flex-shrink-0">
+                                                                    <i className="fas fa-arrow-right text-[8px]"></i>
+                                                                    Перейти
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                            {(() => {
                                 const withTasks = campaigns.filter(c => (c.campTask || '').trim());
                                 const tasksCount = withTasks.length;
                                 return (
                                     <div className="relative">
                                         <button
                                             type="button"
-                                            onClick={() => setTasksOpen(v => !v)}
+                                            onClick={() => { setTasksOpen(v => !v); setAlertsOpen(false); }}
                                             title={`Задачи (${tasksCount})`}
                                             className={`px-2 py-1.5 rounded border transition-colors flex items-center gap-1.5 text-xs ${tasksOpen ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-zinc-800 text-zinc-400 hover:text-orange-400 hover:border-orange-500 bg-zinc-900'}`}>
                                             <span>Задачи</span>

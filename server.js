@@ -122,7 +122,8 @@ async function sendTelegramAlert(message) {
     }
 }
 
-async function checkCostAlerts(configs, allCampaignsMap, source) {
+function findCostAlerts(configs, allCampaignsMap, source) {
+    const out = [];
     for (const config of configs) {
         const threshold = parseFloat(config.costAlert);
         if (!threshold || threshold <= 0) continue;
@@ -130,18 +131,33 @@ async function checkCostAlerts(configs, allCampaignsMap, source) {
             if (camp.customName !== config.name) continue;
             const cost = camp.stats?.allTime?.cost || 0;
             if (cost >= threshold) {
-                const note = (config.costAlertNote || '').trim();
-                await sendTelegramAlert(
-                    `🔔 <b>Превышение расходов!</b>\n\n` +
-                    `📊 ${source === 'admin' ? 'Traffic Admin' : 'Traffic Stats'}\n` +
-                    `🏷 <b>${config.name}</b> → ${camp.name}\n` +
-                    `💰 Расходы: <b>$${cost.toFixed(2)}</b>\n` +
-                    `⚠️ Лимит: $${threshold.toFixed(2)}\n` +
-                    (note ? `📝 ${note}\n` : '') +
-                    `\nОтключите будильник чтобы остановить.`
-                );
+                out.push({
+                    type: 'cost',
+                    source,
+                    customName: config.name,
+                    campaign: camp.name,
+                    cost,
+                    threshold,
+                    note: (config.costAlertNote || '').trim()
+                });
             }
         }
+    }
+    return out;
+}
+
+async function checkCostAlerts(configs, allCampaignsMap, source) {
+    const alerts = findCostAlerts(configs, allCampaignsMap, source);
+    for (const a of alerts) {
+        await sendTelegramAlert(
+            `🔔 <b>Превышение расходов!</b>\n\n` +
+            `📊 ${a.source === 'admin' ? 'Traffic Admin' : 'Traffic Stats'}\n` +
+            `🏷 <b>${a.customName}</b> → ${a.campaign}\n` +
+            `💰 Расходы: <b>$${a.cost.toFixed(2)}</b>\n` +
+            `⚠️ Лимит: $${a.threshold.toFixed(2)}\n` +
+            (a.note ? `📝 ${a.note}\n` : '') +
+            `\nОтключите будильник чтобы остановить.`
+        );
     }
 }
 
@@ -152,16 +168,15 @@ function _normalizeKw(s) {
     return (s || '').toString().trim().toLowerCase();
 }
 
-// Алерт: для кампаний с выбранным «рабочим» ключом проверяет остальные ключи.
-// Если у кого-то allTime cost > порога — присылает ОДНО сообщение на кампанию
-// со списком таких ключей. Дедупликации нет — алерт повторяется каждый цикл.
-async function checkKeywordAlerts(configs, allCampaignsMap, source) {
+// Pure detector: для каждой кампании с выставленным «рабочим» ключом собирает
+// нерабочие ENABLED-ключи с расходом > порога. Возвращает массив алертов.
+function findKeywordAlerts(configs, allCampaignsMap, source) {
+    const out = [];
     for (const config of configs) {
         const primary = _normalizeKw(config.primaryKeyword);
         if (!primary) continue;
-        // Собираем нерабочие ключи с превышением для всех кампаний этого customName
         const offending = []; // { campaign, kwText, cost, adGroup }
-        for (const [key, camp] of Object.entries(allCampaignsMap)) {
+        for (const [, camp] of Object.entries(allCampaignsMap)) {
             if (camp.customName !== config.name) continue;
             const kws = Array.isArray(camp.keywords) ? camp.keywords : [];
             for (const kw of kws) {
@@ -179,14 +194,32 @@ async function checkKeywordAlerts(configs, allCampaignsMap, source) {
         }
         if (offending.length === 0) continue;
         offending.sort((a, b) => b.cost - a.cost);
+        out.push({
+            type: 'keyword',
+            source,
+            customName: config.name,
+            primaryKeyword: config.primaryKeyword,
+            threshold: KEYWORD_ALERT_THRESHOLD,
+            offending
+        });
+    }
+    return out;
+}
+
+// Алерт: для кампаний с выбранным «рабочим» ключом проверяет остальные ключи.
+// Если у кого-то allTime cost > порога — присылает ОДНО сообщение на кампанию
+// со списком таких ключей. Дедупликации нет — алерт повторяется каждый цикл.
+async function checkKeywordAlerts(configs, allCampaignsMap, source) {
+    const alerts = findKeywordAlerts(configs, allCampaignsMap, source);
+    for (const a of alerts) {
         const linesLimit = 10;
-        const linesShown = offending.slice(0, linesLimit).map(o => `• «${o.kwText}» — $${o.cost.toFixed(2)}${o.adGroup ? ` <i>(${o.adGroup})</i>` : ''}`);
-        const more = offending.length > linesLimit ? `\n…и ещё ${offending.length - linesLimit}` : '';
+        const linesShown = a.offending.slice(0, linesLimit).map(o => `• «${o.kwText}» — $${o.cost.toFixed(2)}${o.adGroup ? ` <i>(${o.adGroup})</i>` : ''}`);
+        const more = a.offending.length > linesLimit ? `\n…и ещё ${a.offending.length - linesLimit}` : '';
         await sendTelegramAlert(
-            `🟡 <b>Нерабочий ключ со спендом > $${KEYWORD_ALERT_THRESHOLD}</b>\n\n` +
-            `📊 ${source === 'admin' ? 'Traffic Admin' : 'Traffic Stats'}\n` +
-            `🏷 <b>${config.name}</b>\n` +
-            `⭐ Рабочий ключ: <b>${config.primaryKeyword}</b>\n\n` +
+            `🟡 <b>Нерабочий ключ со спендом > $${a.threshold}</b>\n\n` +
+            `📊 ${a.source === 'admin' ? 'Traffic Admin' : 'Traffic Stats'}\n` +
+            `🏷 <b>${a.customName}</b>\n` +
+            `⭐ Рабочий ключ: <b>${a.primaryKeyword}</b>\n\n` +
             `${linesShown.join('\n')}${more}`
         );
     }
@@ -642,6 +675,17 @@ app.patch('/api/traffic/:name', async (req, res) => {
                         if (camp.customName === campaignToUpdate) { Object.assign(camp, updates); cacheChanged = true; }
                     }
                     if (cacheChanged) {
+                        // Recompute activeAlerts so the bell dropdown reflects the change immediately.
+                        try {
+                            const configsRaw = await readFile(TRAFFIC_FILE, 'utf-8');
+                            const configs = JSON.parse(configsRaw);
+                            cache.activeAlerts = [
+                                ...findCostAlerts(configs, cache.data, 'stats'),
+                                ...findKeywordAlerts(configs, cache.data, 'stats')
+                            ];
+                        } catch (alertsErr) {
+                            console.error('[Server] Non-critical: failed to recompute activeAlerts:', alertsErr.message);
+                        }
                         const ctmpId = Date.now() + Math.random().toString(36).slice(2);
                         const ctmpFile = TRAFFIC_DATA_FILE + '.' + ctmpId + '.tmp';
                         await writeFile(ctmpFile, JSON.stringify(cache), 'utf-8');
@@ -939,6 +983,16 @@ app.patch('/api/traffic-admin/:name', async (req, res) => {
                         if (camp.customName === campaignToUpdate) { Object.assign(camp, updates); cacheChanged = true; }
                     }
                     if (cacheChanged) {
+                        try {
+                            const configsRaw = await readFile(TRAFFIC_ADMIN_FILE, 'utf-8');
+                            const configs = JSON.parse(configsRaw);
+                            cache.activeAlerts = [
+                                ...findCostAlerts(configs, cache.data, 'admin'),
+                                ...findKeywordAlerts(configs, cache.data, 'admin')
+                            ];
+                        } catch (alertsErr) {
+                            console.error('[Server] Non-critical: failed to recompute admin activeAlerts:', alertsErr.message);
+                        }
                         const ctmpId = Date.now() + Math.random().toString(36).slice(2);
                         const ctmpFile = TRAFFIC_ADMIN_DATA_FILE + '.' + ctmpId + '.tmp';
                         await writeFile(ctmpFile, JSON.stringify(cache), 'utf-8');
@@ -1827,13 +1881,19 @@ async function refreshTrafficData(options = {}) {
             }
         }
 
+        // Compute active alerts (mirrors what would be sent to Telegram).
+        const activeAlerts = [
+            ...findCostAlerts(configs, allCampaignsMap, 'stats'),
+            ...findKeywordAlerts(configs, allCampaignsMap, 'stats')
+        ];
+
         // Atomic write to cache file
         const tmpId = Date.now() + Math.random().toString(36).slice(2);
         const tmpFile = TRAFFIC_DATA_FILE + '.' + tmpId + '.tmp';
-        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap }), 'utf-8');
+        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap, activeAlerts }), 'utf-8');
         await rename(tmpFile, TRAFFIC_DATA_FILE);
         timestamps.traffic_data = Date.now();
-        console.log(`[Worker] Traffic Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached.`);
+        console.log(`[Worker] Traffic Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached. ${activeAlerts.length} active alerts.`);
         if (!onlyCampaignName) {
             await checkCostAlerts(configs, allCampaignsMap, 'stats').catch(e => console.error('[Worker] Alert check failed:', e.message));
             await checkKeywordAlerts(configs, allCampaignsMap, 'stats').catch(e => console.error('[Worker] Keyword alert check failed:', e.message));
@@ -2104,12 +2164,17 @@ async function refreshTrafficAdminData(options = {}) {
             }
         }
 
+        const activeAlerts = [
+            ...findCostAlerts(configs, allCampaignsMap, 'admin'),
+            ...findKeywordAlerts(configs, allCampaignsMap, 'admin')
+        ];
+
         const tmpId = Date.now() + Math.random().toString(36).slice(2);
         const tmpFile = TRAFFIC_ADMIN_DATA_FILE + '.' + tmpId + '.tmp';
-        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap }), 'utf-8');
+        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap, activeAlerts }), 'utf-8');
         await rename(tmpFile, TRAFFIC_ADMIN_DATA_FILE);
         timestamps.traffic_admin_data = Date.now();
-        console.log(`[Worker-Admin] Traffic Admin Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached.`);
+        console.log(`[Worker-Admin] Traffic Admin Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached. ${activeAlerts.length} active alerts.`);
         if (!onlyCampaignName) {
             await checkCostAlerts(configs, allCampaignsMap, 'admin').catch(e => console.error('[Worker-Admin] Alert check failed:', e.message));
             await checkKeywordAlerts(configs, allCampaignsMap, 'admin').catch(e => console.error('[Worker-Admin] Keyword alert check failed:', e.message));
