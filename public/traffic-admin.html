@@ -1931,6 +1931,7 @@ function ensureSharing(sheetId, props) {
                             addedAt: campData.addedAt || '',
                             costAlert: campData.costAlert || 0,
                             campTask: campData.campTask || '',
+                            campTaskUpdatedAt: campData.campTaskUpdatedAt || null,
                             campNote: campData.campNote || '',
                             costAlertNote: campData.costAlertNote || '',
                             campTimer: campData.campTimer || 0,
@@ -2236,7 +2237,13 @@ function ensureSharing(sheetId, props) {
                                 );
                             })()}
                             {(() => {
-                                const withTasks = campaigns.filter(c => (c.campTask || '').trim());
+                                const withTasks = campaigns
+                                    .filter(c => (c.campTask || '').trim())
+                                    .sort((a, b) => {
+                                        const ta = a.campTaskUpdatedAt ? Date.parse(a.campTaskUpdatedAt) || 0 : 0;
+                                        const tb = b.campTaskUpdatedAt ? Date.parse(b.campTaskUpdatedAt) || 0 : 0;
+                                        return tb - ta;
+                                    });
                                 const tasksCount = withTasks.length;
                                 return (
                                     <div className="relative">

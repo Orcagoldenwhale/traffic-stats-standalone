@@ -644,6 +644,16 @@ app.patch('/api/traffic/:name', async (req, res) => {
             return res.status(400).json({ error: 'No allowed fields provided' });
         }
 
+        // Auto-clear task when campaign transitions to BAN status
+        if (updates.customStatus === 'ban') {
+            updates.campTask = '';
+            updates.campTaskUpdatedAt = null;
+        }
+        // Stamp campTaskUpdatedAt so the dropdown can sort newest-first
+        if (Object.prototype.hasOwnProperty.call(updates, 'campTask') && updates.campTaskUpdatedAt === undefined) {
+            updates.campTaskUpdatedAt = (updates.campTask || '').trim() ? new Date().toISOString() : null;
+        }
+
         await withFileLock(TRAFFIC_FILE, async () => {
             if (!existsSync(TRAFFIC_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
             const data = await readFile(TRAFFIC_FILE, 'utf-8');
@@ -951,6 +961,14 @@ app.patch('/api/traffic-admin/:name', async (req, res) => {
             }
         }
         if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No allowed fields provided' });
+
+        if (updates.customStatus === 'ban') {
+            updates.campTask = '';
+            updates.campTaskUpdatedAt = null;
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'campTask') && updates.campTaskUpdatedAt === undefined) {
+            updates.campTaskUpdatedAt = (updates.campTask || '').trim() ? new Date().toISOString() : null;
+        }
 
         await withFileLock(TRAFFIC_ADMIN_FILE, async () => {
             if (!existsSync(TRAFFIC_ADMIN_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
@@ -1846,6 +1864,7 @@ async function refreshTrafficData(options = {}) {
                     camp.addedAt = config.addedAt || '';
                     camp.costAlert = config.costAlert || 0;
                     camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
                     camp.campNote = config.campNote || '';
                     camp.costAlertNote = config.costAlertNote || '';
                     camp.campTimer = config.campTimer || 0;
@@ -2134,6 +2153,7 @@ async function refreshTrafficAdminData(options = {}) {
                     camp.addedAt = config.addedAt || '';
                     camp.costAlert = config.costAlert || 0;
                     camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
                     camp.campNote = config.campNote || '';
                     camp.costAlertNote = config.costAlertNote || '';
                     camp.campTimer = config.campTimer || 0;
@@ -2308,9 +2328,41 @@ async function repairCachedDates(filePath) {
         console.error('[Repair] Failed for', filePath, e.message);
     }
 }
+// One-time migration: clear campTask on campaigns already in BAN status,
+// so that the tasks dropdown matches the rule "BAN campaigns have no tasks".
+// Idempotent: no-op once everything is clean.
+async function clearTasksForBanCampaigns(configFilePath, label) {
+    try {
+        if (!existsSync(configFilePath)) return;
+        const raw = await readFile(configFilePath, 'utf-8');
+        const configs = JSON.parse(raw);
+        let changed = 0;
+        for (const c of configs) {
+            if ((c.customStatus || '').toLowerCase() === 'ban' && (c.campTask || '').trim()) {
+                c.campTask = '';
+                c.campTaskUpdatedAt = null;
+                changed++;
+            }
+        }
+        if (changed > 0) {
+            await withFileLock(configFilePath, async () => {
+                await createBackup(configFilePath);
+                const tmpFile = configFilePath + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+                await writeFile(tmpFile, JSON.stringify(configs, null, 2), 'utf-8');
+                await rename(tmpFile, configFilePath);
+            });
+            console.log(`[Migration] ${label}: cleared campTask on ${changed} BAN campaign(s).`);
+        }
+    } catch (e) {
+        console.error('[Migration] clearTasksForBanCampaigns failed for', configFilePath, e.message);
+    }
+}
+
 (async () => {
     await repairCachedDates(TRAFFIC_DATA_FILE);
     await repairCachedDates(TRAFFIC_ADMIN_DATA_FILE);
+    await clearTasksForBanCampaigns(TRAFFIC_FILE, 'traffic');
+    await clearTasksForBanCampaigns(TRAFFIC_ADMIN_FILE, 'traffic_admin');
 })();
 
 setTimeout(refreshAll, 3000);
