@@ -1634,6 +1634,22 @@ async function refreshTrafficData(options = {}) {
 
         for (const config of targetConfigs) {
             if (config.customStatus === 'ban') {
+                // Не парсим Google Sheets (бережём метрики), но синхронизируем
+                // мета-поля из конфига в кеш, чтобы изменения статуса/задачи отражались.
+                for (const k of Object.keys(allCampaignsMap)) {
+                    const camp = allCampaignsMap[k];
+                    if (!camp || camp.customName !== config.name) continue;
+                    camp.customStatus = 'ban';
+                    camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
+                    camp.campNote = config.campNote || '';
+                    camp.comment = config.comment || '';
+                    camp.siteUrl = config.siteUrl || '';
+                    camp.costAlert = config.costAlert || 0;
+                    camp.costAlertNote = config.costAlertNote || '';
+                    camp.campTimer = config.campTimer || 0;
+                    camp.primaryKeyword = config.primaryKeyword || '';
+                }
                 continue;
             }
             try {
@@ -1973,6 +1989,20 @@ async function refreshTrafficAdminData(options = {}) {
         const rates = await getExchangeRates();
         for (const config of targetConfigs) {
             if (config.customStatus === 'ban') {
+                for (const k of Object.keys(allCampaignsMap)) {
+                    const camp = allCampaignsMap[k];
+                    if (!camp || camp.customName !== config.name) continue;
+                    camp.customStatus = 'ban';
+                    camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
+                    camp.campNote = config.campNote || '';
+                    camp.comment = config.comment || '';
+                    camp.siteUrl = config.siteUrl || '';
+                    camp.costAlert = config.costAlert || 0;
+                    camp.costAlertNote = config.costAlertNote || '';
+                    camp.campTimer = config.campTimer || 0;
+                    camp.primaryKeyword = config.primaryKeyword || '';
+                }
                 continue;
             }
             try {
@@ -2331,27 +2361,55 @@ async function repairCachedDates(filePath) {
 // One-time migration: clear campTask on campaigns already in BAN status,
 // so that the tasks dropdown matches the rule "BAN campaigns have no tasks".
 // Idempotent: no-op once everything is clean.
-async function clearTasksForBanCampaigns(configFilePath, label) {
+async function clearTasksForBanCampaigns(configFilePath, cacheFilePath, label) {
     try {
         if (!existsSync(configFilePath)) return;
         const raw = await readFile(configFilePath, 'utf-8');
         const configs = JSON.parse(raw);
-        let changed = 0;
+        const banNames = new Set();
+        let changedConfig = 0;
         for (const c of configs) {
-            if ((c.customStatus || '').toLowerCase() === 'ban' && (c.campTask || '').trim()) {
-                c.campTask = '';
-                c.campTaskUpdatedAt = null;
-                changed++;
+            if ((c.customStatus || '').toLowerCase() === 'ban') {
+                banNames.add(c.name);
+                if ((c.campTask || '').trim()) {
+                    c.campTask = '';
+                    c.campTaskUpdatedAt = null;
+                    changedConfig++;
+                }
             }
         }
-        if (changed > 0) {
+        if (changedConfig > 0) {
             await withFileLock(configFilePath, async () => {
                 await createBackup(configFilePath);
                 const tmpFile = configFilePath + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
                 await writeFile(tmpFile, JSON.stringify(configs, null, 2), 'utf-8');
                 await rename(tmpFile, configFilePath);
             });
-            console.log(`[Migration] ${label}: cleared campTask on ${changed} BAN campaign(s).`);
+            console.log(`[Migration] ${label}: cleared campTask on ${changedConfig} BAN campaign(s) in config.`);
+        }
+        // Также почистить кеш, чтобы изменения видны сразу, не дожидаясь refresh.
+        if (cacheFilePath && existsSync(cacheFilePath) && banNames.size > 0) {
+            await withFileLock(cacheFilePath, async () => {
+                const cacheRaw = await readFile(cacheFilePath, 'utf-8');
+                const cache = JSON.parse(cacheRaw);
+                if (!cache.data) return;
+                let changedCache = 0;
+                for (const k of Object.keys(cache.data)) {
+                    const camp = cache.data[k];
+                    if (!camp || !banNames.has(camp.customName)) continue;
+                    if ((camp.campTask || '').trim()) {
+                        camp.campTask = '';
+                        camp.campTaskUpdatedAt = null;
+                        changedCache++;
+                    }
+                }
+                if (changedCache > 0) {
+                    const tmpFile = cacheFilePath + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+                    await writeFile(tmpFile, JSON.stringify(cache), 'utf-8');
+                    await rename(tmpFile, cacheFilePath);
+                    console.log(`[Migration] ${label}: cleared campTask on ${changedCache} BAN campaign(s) in cache.`);
+                }
+            });
         }
     } catch (e) {
         console.error('[Migration] clearTasksForBanCampaigns failed for', configFilePath, e.message);
@@ -2361,8 +2419,8 @@ async function clearTasksForBanCampaigns(configFilePath, label) {
 (async () => {
     await repairCachedDates(TRAFFIC_DATA_FILE);
     await repairCachedDates(TRAFFIC_ADMIN_DATA_FILE);
-    await clearTasksForBanCampaigns(TRAFFIC_FILE, 'traffic');
-    await clearTasksForBanCampaigns(TRAFFIC_ADMIN_FILE, 'traffic_admin');
+    await clearTasksForBanCampaigns(TRAFFIC_FILE, TRAFFIC_DATA_FILE, 'traffic');
+    await clearTasksForBanCampaigns(TRAFFIC_ADMIN_FILE, TRAFFIC_ADMIN_DATA_FILE, 'traffic_admin');
 })();
 
 setTimeout(refreshAll, 3000);
