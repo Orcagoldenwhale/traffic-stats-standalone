@@ -17,6 +17,7 @@ const TRAFFIC_ADMIN_DATA_FILE = join(__dirname, 'saved_sessions', '_traffic_admi
 const TRAFFIC_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_data_snapshot.json');
 const TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_admin_data_snapshot.json');
 const ADMIN_NOTES_FILE = join(__dirname, 'saved_sessions', '_admin_notes.json');
+const KEITARO_LINKS_FILE = join(__dirname, 'saved_sessions', '_keitaro_links.json');
 
 // Ensure saved_sessions directory exists
 if (!existsSync(SESSIONS_DIR)) {
@@ -321,7 +322,7 @@ app.use((req, res, next) => {
         return res.redirect('/login.html');
     }
     req.session = session;
-    const adminArea = req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic-admin');
+    const adminArea = req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic-admin') || req.path.startsWith('/api/keitaro');
     if (adminArea && session.role !== 'admin') {
         if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
         return res.status(403).send('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#a1a1aa;font-family:sans-serif"><div>403 — нет доступа к админ-панели. <a style="color:#60a5fa" href="/traffic.html">К Traffic Stats</a></div></body>');
@@ -350,6 +351,58 @@ app.post('/api/logout', (req, res) => {
 });
 app.get('/api/me', (req, res) => {
     res.json({ user: req.session ? req.session.user : null, role: req.session ? req.session.role : null });
+});
+
+// --- Keitaro integration (admin-only via middleware) ---
+const KEITARO_URL = (process.env.KEITARO_URL || '').replace(/\/+$/, '');
+const KEITARO_TOKEN = process.env.KEITARO_TOKEN || '';
+let keitaroCache = { at: 0, data: null };
+
+app.get('/api/keitaro/campaigns', async (req, res) => {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен (KEITARO_URL / KEITARO_TOKEN)' });
+    try {
+        if (keitaroCache.data && Date.now() - keitaroCache.at < 5 * 60 * 1000) return res.json(keitaroCache.data);
+        const r = await fetch(`${KEITARO_URL}/admin_api/v1/campaigns`, { headers: { 'Api-Key': KEITARO_TOKEN } });
+        if (!r.ok) return res.status(502).json({ error: `Keitaro API ${r.status}` });
+        const arr = await r.json();
+        const list = Array.isArray(arr) ? arr.map(c => ({ id: c.id, name: c.name, alias: c.alias, state: c.state })) : [];
+        keitaroCache = { at: Date.now(), data: list };
+        res.json(list);
+    } catch (e) {
+        console.error('[Keitaro] campaigns fetch failed:', e.message);
+        res.status(502).json({ error: e.message });
+    }
+});
+
+app.get('/api/keitaro/links', async (req, res) => {
+    try {
+        if (!existsSync(KEITARO_LINKS_FILE)) return res.json({ links: {} });
+        const raw = await readFile(KEITARO_LINKS_FILE, 'utf-8');
+        res.json({ links: JSON.parse(raw) });
+    } catch (e) {
+        res.json({ links: {} });
+    }
+});
+
+app.post('/api/keitaro/links', async (req, res) => {
+    try {
+        const { campaign, keitaro } = req.body || {};
+        if (!campaign || typeof campaign !== 'string') return res.status(400).json({ error: 'campaign required' });
+        await withFileLock(KEITARO_LINKS_FILE, async () => {
+            let links = {};
+            if (existsSync(KEITARO_LINKS_FILE)) { try { links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); } catch { links = {}; } }
+            if (keitaro && keitaro.id) links[campaign] = { id: keitaro.id, name: keitaro.name || '', alias: keitaro.alias || '' };
+            else delete links[campaign];
+            const tmp = KEITARO_LINKS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+            await writeFile(tmp, JSON.stringify(links, null, 2), 'utf-8');
+            await rename(tmp, KEITARO_LINKS_FILE);
+        });
+        auditLog('SAVE', 'keitaro_link', String(campaign).slice(0, 60), req);
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('[Keitaro] save link failed:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 if (existsSync(DIST_DIR)) {

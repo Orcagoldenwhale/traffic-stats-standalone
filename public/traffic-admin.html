@@ -1381,6 +1381,129 @@ function ensureSharing(sheetId, props) {
   }
 }`;
 
+        // --- KEITARO PANEL (campaign <-> Keitaro mapping table) ---
+        const KeitaroPanel = () => {
+            const { useState, useEffect } = React;
+            const [myCamps, setMyCamps] = useState([]);
+            const [kCamps, setKCamps] = useState([]);
+            const [links, setLinks] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState('');
+            const [openRow, setOpenRow] = useState(null);
+            const [search, setSearch] = useState('');
+            const [filter, setFilter] = useState('');
+
+            useEffect(() => {
+                (async () => {
+                    setLoading(true); setError('');
+                    try {
+                        const [adm, st, kc, lk] = await Promise.all([
+                            fetch('/api/traffic-admin-data').then(r => r.ok ? r.json() : { data: {} }).catch(() => ({ data: {} })),
+                            fetch('/api/traffic-data').then(r => r.ok ? r.json() : { data: {} }).catch(() => ({ data: {} })),
+                            fetch('/api/keitaro/campaigns').then(r => r.json()).catch(e => ({ error: String((e && e.message) || e) })),
+                            fetch('/api/keitaro/links').then(r => r.json()).catch(() => ({ links: {} }))
+                        ]);
+                        const names = new Set();
+                        for (const src of [adm, st]) {
+                            const data = (src && src.data) || {};
+                            for (const k of Object.keys(data)) {
+                                const c = data[k];
+                                if (c && c.customStatus === 'live') { const n = (c.customName || c.name || '').trim(); if (n) names.add(n); }
+                            }
+                        }
+                        setMyCamps([...names].sort((a, b) => a.localeCompare(b, 'ru')));
+                        if (kc && kc.error) setError('Keitaro: ' + kc.error);
+                        else setKCamps(Array.isArray(kc) ? kc : []);
+                        setLinks((lk && lk.links) ? lk.links : {});
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                })();
+            }, []);
+
+            const saveLink = async (campaign, k) => {
+                setLinks(prev => { const next = { ...prev }; if (k) next[campaign] = { id: k.id, name: k.name, alias: k.alias }; else delete next[campaign]; return next; });
+                setOpenRow(null); setSearch('');
+                try {
+                    await fetch('/api/keitaro/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campaign, keitaro: k ? { id: k.id, name: k.name, alias: k.alias } : null }) });
+                } catch (e) { console.error('keitaro save link failed', e); }
+            };
+
+            const matches = (q) => {
+                const s = (q || '').trim().toLowerCase();
+                const arr = !s ? kCamps : kCamps.filter(c => (c.name || '').toLowerCase().includes(s) || (c.alias || '').toLowerCase().includes(s));
+                return arr.slice(0, 50);
+            };
+
+            const visibleCamps = filter.trim() ? myCamps.filter(n => n.toLowerCase().includes(filter.trim().toLowerCase())) : myCamps;
+
+            if (loading) return <div className="flex items-center justify-center h-full text-zinc-500 text-sm"><i className="fas fa-spinner fa-spin mr-2"></i> Загрузка...</div>;
+
+            return (
+                <div className="flex flex-col h-full">
+                    <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+                        <div className="text-xs text-zinc-400">Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b></div>
+                        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Фильтр моих кампаний..." className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-3 py-1.5 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-zinc-600" />
+                    </div>
+                    {error && <div className="text-red-400 text-xs mb-2">{error}</div>}
+                    <div className="flex-1 overflow-auto border border-zinc-800 rounded-lg">
+                        <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-zinc-950 z-10">
+                                <tr className="text-left text-zinc-500 uppercase tracking-wider text-[10px]">
+                                    <th className="px-3 py-2 font-bold w-1/2">Моя кампания (live)</th>
+                                    <th className="px-3 py-2 font-bold">Кампания в Keitaro</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {visibleCamps.map(name => {
+                                    const linked = links[name];
+                                    const isOpen = openRow === name;
+                                    return (
+                                        <tr key={name} className="border-t border-zinc-800/60 hover:bg-zinc-900/40">
+                                            <td className="px-3 py-2 text-zinc-200 align-top">{name}</td>
+                                            <td className="px-3 py-2 align-top">
+                                                {linked && !isOpen ? (
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="text-cyan-400"><i className="fas fa-link mr-1.5 text-[10px]"></i>{linked.name}</span>
+                                                        {linked.alias && <span className="text-[10px] text-zinc-600 font-mono">{linked.alias}</span>}
+                                                        <button type="button" onClick={() => { setOpenRow(name); setSearch(''); }} className="text-zinc-500 hover:text-cyan-400 text-[10px]" title="Изменить"><i className="fas fa-pen"></i></button>
+                                                        <button type="button" onClick={() => saveLink(name, null)} className="text-zinc-500 hover:text-red-400 text-[10px]" title="Убрать связь"><i className="fas fa-times"></i></button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="relative">
+                                                        <input
+                                                            value={isOpen ? search : ''}
+                                                            onFocus={() => { setOpenRow(name); setSearch(''); }}
+                                                            onChange={e => setSearch(e.target.value)}
+                                                            placeholder={linked ? linked.name : 'поиск кампании Keitaro...'}
+                                                            className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-2 py-1 w-full max-w-md focus:outline-none focus:border-cyan-500 placeholder:text-zinc-600"
+                                                        />
+                                                        {isOpen && (
+                                                            <div className="absolute z-20 mt-1 w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl max-h-64 overflow-y-auto">
+                                                                {matches(search).length === 0 && <div className="px-3 py-2 text-zinc-500 text-[11px] italic">Ничего не найдено</div>}
+                                                                {matches(search).map(k => (
+                                                                    <button key={k.id} type="button" onClick={() => saveLink(name, k)} className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 transition-colors flex items-center justify-between gap-2">
+                                                                        <span className="text-zinc-200">{k.name}</span>
+                                                                        <span className="text-[10px] text-zinc-600 font-mono">{k.alias}</span>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                {visibleCamps.length === 0 && (
+                                    <tr><td colSpan="2" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет боевых кампаний</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
         // --- MAIN DASHBOARD ---
         const Dashboard = () => {
             const { useState, useEffect, useRef } = React;
@@ -2695,11 +2818,8 @@ function ensureSharing(sheetId, props) {
                                         <i className="fas fa-times"></i>
                                     </button>
                                 </div>
-                                <div className="flex-1 overflow-auto p-4">
-                                    <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm gap-2">
-                                        <i className="fas fa-bullseye text-2xl text-zinc-600"></i>
-                                        <span>Интеграция с Keitaro — в разработке</span>
-                                    </div>
+                                <div className="flex-1 overflow-hidden p-4">
+                                    <KeitaroPanel />
                                 </div>
                             </div>
                         </div>
