@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Вход — Traffic Ops</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #000; color: #e4e4e7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .card { width: 320px; background: #09090b; border: 1px solid #27272a; border-radius: 14px; padding: 32px; box-shadow: 0 20px 50px rgba(0,0,0,.6); }
+        .icon { width: 48px; height: 48px; border-radius: 50%; background: rgba(59,130,246,.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: #60a5fa; }
+        h1 { font-size: 13px; text-align: center; text-transform: uppercase; letter-spacing: .2em; color: #d4d4d8; margin: 0 0 4px; }
+        p.sub { font-size: 11px; text-align: center; color: #71717a; margin: 0 0 22px; }
+        input { width: 100%; background: #18181b; border: 1px solid #3f3f46; color: #e4e4e7; padding: 12px; border-radius: 9px; font-size: 14px; margin-bottom: 12px; outline: none; }
+        input:focus { border-color: #3b82f6; }
+        button { width: 100%; background: #2563eb; color: #fff; border: 0; padding: 11px; border-radius: 9px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; cursor: pointer; }
+        button:hover { background: #3b82f6; }
+        button:disabled { opacity: .6; cursor: default; }
+        .err { color: #f87171; font-size: 11px; text-align: center; margin-top: 12px; min-height: 14px; }
+    </style>
+</head>
+<body>
+    <form class="card" id="loginForm">
+        <div class="icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        </div>
+        <h1>Traffic Ops</h1>
+        <p class="sub">Вход в систему</p>
+        <input id="user" name="user" placeholder="Логин" autocomplete="username" autofocus>
+        <input id="pass" name="pass" type="password" placeholder="Пароль" autocomplete="current-password">
+        <button type="submit" id="btn">Войти</button>
+        <div class="err" id="err"></div>
+    </form>
+    <script>
+        const form = document.getElementById('loginForm');
+        const errEl = document.getElementById('err');
+        const btn = document.getElementById('btn');
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errEl.textContent = '';
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user: document.getElementById('user').value,
+                        pass: document.getElementById('pass').value
+                    })
+                });
+                if (r.ok) { window.location.href = '/traffic.html'; return; }
+                const d = await r.json().catch(() => ({}));
+                errEl.textContent = d.error || 'Ошибка входа';
+            } catch (_) {
+                errEl.textContent = 'Сеть недоступна';
+            }
+            btn.disabled = false;
+        });
+    </script>
+</body>
+</html>

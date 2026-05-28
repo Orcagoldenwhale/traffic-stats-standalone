@@ -3,6 +3,7 @@ import { readdir, readFile, writeFile, unlink, mkdir, rename, appendFile, stat }
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { randomBytes, timingSafeEqual } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = join(__dirname, 'saved_sessions');
@@ -265,6 +266,90 @@ app.use((req, res, next) => {
         res.setHeader('Pragma', 'no-cache');
     }
     next();
+});
+
+// --- Auth (session-based, two roles: user / admin) ---
+const ACCOUNTS = [];
+if (process.env.TRAFFIC_USER && process.env.TRAFFIC_PASS) ACCOUNTS.push({ user: process.env.TRAFFIC_USER, pass: process.env.TRAFFIC_PASS, role: 'user' });
+if (process.env.ADMIN_USER && process.env.ADMIN_PASS) ACCOUNTS.push({ user: process.env.ADMIN_USER, pass: process.env.ADMIN_PASS, role: 'admin' });
+if (ACCOUNTS.length === 0) {
+    console.error('[AUTH] No accounts configured — set TRAFFIC_USER/TRAFFIC_PASS and/or ADMIN_USER/ADMIN_PASS. All HTTP access is denied until configured.');
+}
+
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const sessions = new Map();
+
+function safeEqual(a, b) {
+    const ab = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    if (ab.length !== bb.length) return false;
+    return timingSafeEqual(ab, bb);
+}
+function findAccount(user, pass) {
+    let match = null;
+    for (const acc of ACCOUNTS) {
+        if (safeEqual(acc.user, user) && safeEqual(acc.pass, pass)) match = acc;
+    }
+    return match;
+}
+function parseCookies(req) {
+    const out = {};
+    const header = req.headers.cookie;
+    if (!header) return out;
+    for (const part of header.split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+    }
+    return out;
+}
+function getSession(req) {
+    const sid = parseCookies(req).sid;
+    if (!sid) return null;
+    const s = sessions.get(sid);
+    if (!s) return null;
+    if (s.expires < Date.now()) { sessions.delete(sid); return null; }
+    return s;
+}
+const cookieIsSecure = (req) => req.headers['x-forwarded-proto'] === 'https' || req.secure;
+
+const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/api/logout']);
+app.use((req, res, next) => {
+    if (PUBLIC_PATHS.has(req.path)) return next();
+    const session = getSession(req);
+    if (!session) {
+        if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
+        return res.redirect('/login.html');
+    }
+    req.session = session;
+    const adminArea = req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic-admin');
+    if (adminArea && session.role !== 'admin') {
+        if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).send('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#a1a1aa;font-family:sans-serif"><div>403 — нет доступа к админ-панели. <a style="color:#60a5fa" href="/traffic.html">К Traffic Stats</a></div></body>');
+    }
+    next();
+});
+
+app.post('/api/login', (req, res) => {
+    const { user, pass } = req.body || {};
+    const acc = findAccount(user || '', pass || '');
+    if (!acc) {
+        auditLog('LOGIN_FAIL', 'auth', `user=${String(user || '').slice(0, 40)}`, req);
+        return res.status(401).json({ error: 'Неверный логин или пароль' });
+    }
+    const sid = randomBytes(32).toString('hex');
+    sessions.set(sid, { user: acc.user, role: acc.role, expires: Date.now() + SESSION_TTL_MS });
+    res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${cookieIsSecure(req) ? '; Secure' : ''}`);
+    auditLog('LOGIN', 'auth', `user=${acc.user} role=${acc.role}`, req);
+    res.json({ ok: true, role: acc.role });
+});
+app.post('/api/logout', (req, res) => {
+    const sid = parseCookies(req).sid;
+    if (sid) sessions.delete(sid);
+    res.setHeader('Set-Cookie', `sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${cookieIsSecure(req) ? '; Secure' : ''}`);
+    res.json({ ok: true });
+});
+app.get('/api/me', (req, res) => {
+    res.json({ user: req.session ? req.session.user : null, role: req.session ? req.session.role : null });
 });
 
 if (existsSync(DIST_DIR)) {
