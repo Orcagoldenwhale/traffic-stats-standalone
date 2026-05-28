@@ -1,5 +1,6 @@
 node_modules/
 dist/
+ecosystem.config.cjs
 
 # Runtime data
 saved_sessions/backups/
