@@ -1395,6 +1395,9 @@ function ensureSharing(sheetId, props) {
             const [tab, setTab] = useState('links');
             const [myStats, setMyStats] = useState({});
             const [kStats, setKStats] = useState({});
+            const [sortBy, setSortBy] = useState('cost');
+            const [sortDir, setSortDir] = useState('desc');
+            const [onlyLinked, setOnlyLinked] = useState(false);
 
             useEffect(() => {
                 (async () => {
@@ -1452,6 +1455,31 @@ function ensureSharing(sheetId, props) {
             for (const v of Object.values(links)) { if (v && v.id != null) idCount[v.id] = (idCount[v.id] || 0) + 1; }
             const dupCount = Object.values(idCount).filter(n => n > 1).length;
 
+            const campRows = visibleCamps.map(name => {
+                const linked = links[name];
+                const my = myStats[name] || { cost: 0, clicks: 0 };
+                const ks = linked ? (kStats[linked.id] || null) : null;
+                const conv = ks ? (ks.conversions || 0) : null;
+                const sales = ks ? (ks.sales || 0) : null;
+                const kclicks = ks ? (ks.clicks || 0) : null;
+                return {
+                    name, linked: !!linked, cost: my.cost, clicks: my.clicks,
+                    revenue: ks ? (ks.revenue || 0) : null, kclicks, conv, sales,
+                    c2r: (ks && kclicks > 0) ? (conv / kclicks * 100) : null,
+                    r2d: (ks && conv > 0) ? (sales / conv * 100) : null
+                };
+            });
+            const sortDirN = sortDir === 'asc' ? 1 : -1;
+            const sortedRows = (onlyLinked ? campRows.filter(r => r.linked) : campRows).slice().sort((a, b) => {
+                if (sortBy === 'name') return a.name.localeCompare(b.name, 'ru') * sortDirN;
+                const av = a[sortBy] == null ? -Infinity : a[sortBy];
+                const bv = b[sortBy] == null ? -Infinity : b[sortBy];
+                return (av - bv) * sortDirN;
+            });
+            const sortTh = (k, label, right) => (
+                <th onClick={() => { if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir('desc'); } }} className={`px-3 py-2 font-bold cursor-pointer select-none hover:text-zinc-300 whitespace-nowrap ${right ? 'text-right' : ''}`}>{label}{sortBy === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+            );
+
             if (loading) return <div className="flex items-center justify-center h-full text-zinc-500 text-sm"><i className="fas fa-spinner fa-spin mr-2"></i> Загрузка...</div>;
 
             return (
@@ -1461,8 +1489,16 @@ function ensureSharing(sheetId, props) {
                         <button type="button" onClick={() => setTab('campaigns')} className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 -mb-px transition-colors ${tab === 'campaigns' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>Кампании</button>
                     </div>
                     <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
-                        <div className="text-xs text-zinc-400">Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b>{dupCount > 0 && <span> · дубли: <b className="text-amber-400">{dupCount}</b></span>}</div>
-                        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Фильтр моих кампаний..." className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-3 py-1.5 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-zinc-600" />
+                        {tab === 'links' ? (
+                            <div className="text-xs text-zinc-400">Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b>{dupCount > 0 && <span> · дубли: <b className="text-amber-400">{dupCount}</b></span>}</div>
+                        ) : (
+                            <div className="flex items-center gap-3 text-xs text-zinc-400">
+                                <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-zinc-200"><input type="checkbox" checked={onlyLinked} onChange={e => setOnlyLinked(e.target.checked)} className="accent-cyan-500" /> только связанные</label>
+                                <span>показано: <b className="text-zinc-200">{sortedRows.length}</b></span>
+                                <span className="text-zinc-600 hidden sm:inline">сортировка — клик по колонке</span>
+                            </div>
+                        )}
+                        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Поиск кампании..." className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-3 py-1.5 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-zinc-600" />
                     </div>
                     {error && <div className="text-red-400 text-xs mb-2">{error}</div>}
                     {tab === 'links' && (
@@ -1529,30 +1565,33 @@ function ensureSharing(sheetId, props) {
                         <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-zinc-950 z-10">
                                 <tr className="text-left text-zinc-500 uppercase tracking-wider text-[10px]">
-                                    <th className="px-3 py-2 font-bold">Кампания (live)</th>
-                                    <th className="px-3 py-2 font-bold text-right">Расход</th>
-                                    <th className="px-3 py-2 font-bold text-right">Доход</th>
-                                    <th className="px-3 py-2 font-bold text-right">Клики (наши)</th>
-                                    <th className="px-3 py-2 font-bold text-right">Клики (Keitaro)</th>
+                                    {sortTh('name', 'Кампания', false)}
+                                    {sortTh('cost', 'Расход', true)}
+                                    {sortTh('revenue', 'Доход', true)}
+                                    {sortTh('clicks', 'Клики (наши)', true)}
+                                    {sortTh('kclicks', 'Клики (Keitaro)', true)}
+                                    {sortTh('conv', 'Конв.', true)}
+                                    {sortTh('sales', 'Продажи', true)}
+                                    {sortTh('c2r', '% клик→рега', true)}
+                                    {sortTh('r2d', '% рега→деп', true)}
                                 </tr>
                             </thead>
                             <tbody>
-                                {visibleCamps.map(name => {
-                                    const linked = links[name];
-                                    const my = myStats[name] || { cost: 0, clicks: 0 };
-                                    const ks = linked ? kStats[linked.id] : null;
-                                    return (
-                                        <tr key={name} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60">
-                                            <td className="px-3 py-2 text-zinc-200">{name}</td>
-                                            <td className="px-3 py-2 text-right text-zinc-300 font-mono">${my.cost.toFixed(2)}</td>
-                                            <td className="px-3 py-2 text-right font-mono">{ks ? <span className="text-green-400">${(ks.revenue || 0).toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
-                                            <td className="px-3 py-2 text-right text-zinc-300 font-mono">{my.clicks}</td>
-                                            <td className="px-3 py-2 text-right font-mono">{ks ? <span className="text-cyan-400">{ks.clicks || 0}</span> : <span className="text-zinc-600">—</span>}</td>
-                                        </tr>
-                                    );
-                                })}
-                                {visibleCamps.length === 0 && (
-                                    <tr><td colSpan="5" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет боевых кампаний</td></tr>
+                                {sortedRows.map(r => (
+                                    <tr key={r.name} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60">
+                                        <td className="px-3 py-2 text-zinc-200">{r.name}</td>
+                                        <td className="px-3 py-2 text-right text-zinc-300 font-mono">${r.cost.toFixed(2)}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.revenue != null ? <span className="text-green-400">${r.revenue.toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right text-zinc-300 font-mono">{r.clicks}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.kclicks != null ? <span className="text-cyan-400">{r.kclicks}</span> : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.conv != null ? r.conv : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.sales != null ? r.sales : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.c2r != null ? <span className="text-zinc-300">{r.c2r.toFixed(1)}%</span> : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.r2d != null ? <span className="text-zinc-300">{r.r2d.toFixed(1)}%</span> : <span className="text-zinc-600">—</span>}</td>
+                                    </tr>
+                                ))}
+                                {sortedRows.length === 0 && (
+                                    <tr><td colSpan="9" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет кампаний</td></tr>
                                 )}
                             </tbody>
                         </table>
