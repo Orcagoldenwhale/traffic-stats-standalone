@@ -18,6 +18,7 @@ const TRAFFIC_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_d
 const TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_admin_data_snapshot.json');
 const ADMIN_NOTES_FILE = join(__dirname, 'saved_sessions', '_admin_notes.json');
 const KEITARO_LINKS_FILE = join(__dirname, 'saved_sessions', '_keitaro_links.json');
+const SESSIONS_FILE = join(__dirname, 'saved_sessions', '_sessions.json');
 
 // Ensure saved_sessions directory exists
 if (!existsSync(SESSIONS_DIR)) {
@@ -280,6 +281,37 @@ if (ACCOUNTS.length === 0) {
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
 
+// Persist sessions to disk so a server restart (deploy / pm2 restart) does NOT log everyone out.
+// Without this, every restart wipes all in-memory sessions → already-open tabs get silent 401s and
+// can lose unsaved edits. Sessions only change on login/logout (TTL is fixed at creation, not sliding),
+// so persisting on those two events is sufficient.
+async function persistSessions() {
+    try {
+        const obj = {};
+        for (const [sid, s] of sessions) obj[sid] = s;
+        const tmpFile = SESSIONS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+        await writeFile(tmpFile, JSON.stringify(obj), 'utf-8');
+        await rename(tmpFile, SESSIONS_FILE);
+    } catch (e) {
+        console.error('[AUTH] Failed to persist sessions:', e.message);
+    }
+}
+async function loadSessions() {
+    try {
+        if (!existsSync(SESSIONS_FILE)) return;
+        const obj = JSON.parse(await readFile(SESSIONS_FILE, 'utf-8'));
+        const now = Date.now();
+        let restored = 0;
+        for (const [sid, s] of Object.entries(obj)) {
+            if (s && typeof s.expires === 'number' && s.expires > now) { sessions.set(sid, s); restored++; }
+        }
+        console.log(`[AUTH] Restored ${restored} active session(s) from disk`);
+    } catch (e) {
+        console.error('[AUTH] Failed to load sessions:', e.message);
+    }
+}
+await loadSessions();
+
 function safeEqual(a, b) {
     const ab = Buffer.from(String(a));
     const bb = Buffer.from(String(b));
@@ -339,13 +371,14 @@ app.post('/api/login', (req, res) => {
     }
     const sid = randomBytes(32).toString('hex');
     sessions.set(sid, { user: acc.user, role: acc.role, expires: Date.now() + SESSION_TTL_MS });
+    persistSessions();
     res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${cookieIsSecure(req) ? '; Secure' : ''}`);
     auditLog('LOGIN', 'auth', `user=${acc.user} role=${acc.role}`, req);
     res.json({ ok: true, role: acc.role });
 });
 app.post('/api/logout', (req, res) => {
     const sid = parseCookies(req).sid;
-    if (sid) sessions.delete(sid);
+    if (sid) { sessions.delete(sid); persistSessions(); }
     res.setHeader('Set-Cookie', `sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${cookieIsSecure(req) ? '; Secure' : ''}`);
     res.json({ ok: true });
 });

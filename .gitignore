@@ -12,6 +12,7 @@ saved_sessions/_traffic_data_snapshot.json
 saved_sessions/_traffic_admin_data_snapshot.json
 saved_sessions/_admin_notes.json
 saved_sessions/_keitaro_links.json
+saved_sessions/_sessions.json
 saved_sessions/_audit.log*
 saved_sessions/analytics/
 saved_sessions/*.txt

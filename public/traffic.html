@@ -86,6 +86,49 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
+        // --- Session-expiry guard ---
+        // If a request comes back 401 (dead session after a server restart or 12h TTL), do NOT swallow it:
+        // surface a blocking overlay so edits are never lost silently. Unsaved text stays in the fields.
+        let __authExpired = false;
+        function flagAuthExpired() {
+            if (__authExpired) return;
+            __authExpired = true;
+            window.dispatchEvent(new CustomEvent('auth-expired'));
+        }
+
+        // --- Flush pending autosaves before the tab closes/hides, so a debounced (800ms) note/comment
+        // is never lost if the user closes the tab right after typing. Each row registers a flush fn here.
+        const __dirtyFlushers = new Set();
+        function __flushAllDirty() { __dirtyFlushers.forEach(f => { try { f(); } catch (e) {} }); }
+        window.addEventListener('pagehide', __flushAllDirty);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') __flushAllDirty(); });
+
+        function SessionExpiredOverlay() {
+            const [show, setShow] = useState(false);
+            useEffect(() => {
+                const h = () => setShow(true);
+                window.addEventListener('auth-expired', h);
+                return () => window.removeEventListener('auth-expired', h);
+            }, []);
+            if (!show) return null;
+            return (
+                <div style={{position:'fixed',inset:0,zIndex:99999,background:'rgba(0,0,0,0.85)',backdropFilter:'blur(2px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    <div style={{maxWidth:'440px',margin:'16px',background:'#18181b',border:'1px solid #ef4444',borderRadius:'14px',padding:'28px',textAlign:'center',fontFamily:'sans-serif'}}>
+                        <div style={{fontSize:'42px',marginBottom:'10px'}}>⚠️</div>
+                        <div style={{fontSize:'17px',fontWeight:700,color:'#f87171',marginBottom:'10px'}}>Сессия истекла</div>
+                        <div style={{fontSize:'13px',lineHeight:1.6,color:'#a1a1aa',marginBottom:'20px'}}>
+                            Последние изменения <b style={{color:'#e4e4e7'}}>не сохранены</b>. Ваш текст остался в полях и не потерян.<br/>
+                            Откройте вход <b style={{color:'#e4e4e7'}}>в новой вкладке</b>, войдите, вернитесь сюда и сохраните снова.
+                        </div>
+                        <a href="/login.html" target="_blank" rel="noopener" style={{display:'inline-block',background:'#ef4444',color:'#fff',padding:'11px 22px',borderRadius:'9px',fontSize:'14px',fontWeight:600,textDecoration:'none'}}>Войти заново</a>
+                        <div style={{marginTop:'14px'}}>
+                            <button onClick={() => window.location.reload()} style={{background:'none',border:'none',color:'#71717a',fontSize:'12px',cursor:'pointer',textDecoration:'underline'}}>Обновить страницу</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // --- CUSTOM STATUS CONFIG ---
         const CUSTOM_STATUSES = [
             { key: 'warmup', label: 'ПРОГРЕВ', color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: 'fa-fire' },
@@ -257,6 +300,7 @@
                         keepalive: true
                     });
                     if (res.ok) lastSavedComment.current = value;
+                    else if (res.status === 401) flagAuthExpired();
                 } catch(e) {
                     console.error('Failed to save comment', e);
                 } finally {
@@ -300,6 +344,7 @@
                         keepalive: true
                     });
                     if (res.ok) lastSavedNote.current = value;
+                    else if (res.status === 401) flagAuthExpired();
                 } catch(e) {
                     console.error('Failed to save note', e);
                 } finally {
@@ -328,6 +373,18 @@
                 setCampNote(data.campNote || '');
                 lastSavedNote.current = data.campNote || '';
             }, [data.campNote]);
+
+            // Flush pending (debounced) note/comment if this row unmounts or the tab closes/hides.
+            // saveNote/saveComment are no-ops when the value is unchanged, so a clean field costs nothing.
+            const campNoteRef = useRef(campNote); campNoteRef.current = campNote;
+            const commentRef = useRef(comment); commentRef.current = comment;
+            const saveNoteRef = useRef(saveNote); saveNoteRef.current = saveNote;
+            const saveCommentRef = useRef(saveComment); saveCommentRef.current = saveComment;
+            useEffect(() => {
+                const flush = () => { saveNoteRef.current(campNoteRef.current); saveCommentRef.current(commentRef.current); };
+                __dirtyFlushers.add(flush);
+                return () => { __dirtyFlushers.delete(flush); flush(); };
+            }, []);
 
             useEffect(() => {
                 if (data.costAlertNote === undefined) return;
@@ -1910,7 +1967,7 @@ function ensureSharing(sheetId, props) {
                     try {
                         if (isFetching.current || isSnapshotMode.current) return;
                         const statusRes = await fetch('/api/status');
-                        if (!statusRes.ok) return;
+                        if (!statusRes.ok) { if (statusRes.status === 401) flagAuthExpired(); return; }
                         const statuses = await statusRes.json();
 
                         if (statuses.traffic > currentDataVersion.current) {
@@ -2534,7 +2591,7 @@ function ensureSharing(sheetId, props) {
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(<><App /><SessionExpiredOverlay /></>);
     </script>
 </body>
 
