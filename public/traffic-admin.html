@@ -1438,6 +1438,95 @@ function ensureSharing(sheetId, props) {
   }
 }`;
 
+        // --- KEITARO EXPORT (auto daily cost push: settings menu + run now) ---
+        const KeitaroExportButton = () => {
+            const { useState, useEffect, useRef } = React;
+            const [open, setOpen] = useState(false);
+            const [cfg, setCfg] = useState({ enabled: true, time: '10:00', lastRun: null, running: false });
+            const [busy, setBusy] = useState(false);
+            const [msg, setMsg] = useState('');
+            const ref = useRef(null);
+
+            const load = async () => {
+                try { const r = await fetch('/api/keitaro/export-settings', { cache: 'no-store' }); if (r.ok) setCfg(await r.json()); } catch (e) {}
+            };
+            useEffect(() => { load(); }, []);
+            useEffect(() => {
+                if (!open) return;
+                const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+                document.addEventListener('mousedown', h);
+                return () => document.removeEventListener('mousedown', h);
+            }, [open]);
+
+            const save = async (patch) => {
+                setCfg(c => ({ ...c, ...patch }));
+                try { await fetch('/api/keitaro/export-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }); } catch (e) {}
+            };
+            const runNow = async () => {
+                if (busy) return;
+                setBusy(true); setMsg('Выгружаю… (~30 сек)');
+                try {
+                    const r = await fetch('/api/keitaro/export-run', { method: 'POST' });
+                    const j = await r.json();
+                    if (r.ok && j.result) { setCfg(c => ({ ...c, lastRun: j.result })); setMsg(''); }
+                    else setMsg(j.error || 'Ошибка');
+                } catch (e) { setMsg('Ошибка сети'); } finally { setBusy(false); }
+            };
+            const lr = cfg.lastRun;
+            const fmt = (iso) => { try { return new Date(iso).toLocaleString('ru-RU'); } catch (e) { return iso; } };
+
+            return (
+                <div className="relative" ref={ref}>
+                    <button type="button" onClick={() => setOpen(o => !o)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs transition-colors ${open ? 'border-cyan-500 text-cyan-300' : 'border-zinc-700 text-zinc-400 hover:text-cyan-300 hover:border-cyan-600'}`}
+                        title="Авто-выгрузка расхода в Keitaro">
+                        <i className="fas fa-cloud-upload-alt text-[11px]"></i>
+                        <span className="normal-case tracking-normal">Выгрузка</span>
+                        {cfg.enabled && <span className="w-1.5 h-1.5 rounded-full bg-green-500" title="авто-выгрузка включена"></span>}
+                    </button>
+                    {open && (
+                        <div className="absolute left-0 top-full mt-2 w-80 bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl p-3 z-[120] text-left normal-case tracking-normal" onClick={e => e.stopPropagation()}>
+                            <div className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider mb-2">Авто-выгрузка расхода</div>
+                            <label className="flex items-center justify-between gap-2 mb-2 cursor-pointer">
+                                <span className="text-xs text-zinc-400">Автоматически каждый день</span>
+                                <input type="checkbox" checked={!!cfg.enabled} onChange={e => save({ enabled: e.target.checked })} className="accent-cyan-500 w-4 h-4" />
+                            </label>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                                <span className="text-xs text-zinc-400">Время <span className="text-zinc-600">(сервер ≈ Лиссабон)</span></span>
+                                <input type="time" value={cfg.time || '10:00'} onChange={e => save({ time: e.target.value })}
+                                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 outline-none focus:border-cyan-600" />
+                            </div>
+                            <div className="text-[10px] text-zinc-500 mb-3 leading-snug">
+                                Каждый день в {cfg.time || '10:00'} расход за <b className="text-zinc-400">вчера</b> заливается в Keitaro по всем связанным кампаниям (tz Москва).
+                            </div>
+                            <button type="button" onClick={runNow} disabled={busy}
+                                className="w-full mb-2 px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-2">
+                                {busy ? <><i className="fas fa-spinner fa-spin"></i> Выгружаю…</> : <><i className="fas fa-bolt"></i> Выгрузить сейчас (за вчера)</>}
+                            </button>
+                            {msg && <div className="text-[10px] text-amber-400 mb-2">{msg}</div>}
+                            {lr ? (
+                                <div className="border-t border-zinc-800 pt-2 text-[10px] text-zinc-400 leading-relaxed">
+                                    <div className="text-zinc-500">Последний запуск: {fmt(lr.at)} {lr.trigger === 'schedule' ? '(авто)' : '(вручную)'}</div>
+                                    <div>День <b className="text-zinc-300">{lr.day}</b> · отправлено <b className="text-zinc-300">${lr.sentTotal}</b> по {lr.campaigns} камп.</div>
+                                    <div>Село <b className="text-green-400">${lr.landed}</b> · не село <b className="text-amber-400">${lr.notLanded}</b> ({(lr.zeroClick || []).length} с 0 кликов)</div>
+                                    {(lr.zeroClick || []).length > 0 && (
+                                        <details className="mt-1">
+                                            <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">0 кликов — не выгрузилось ({lr.zeroClick.length})</summary>
+                                            <div className="mt-1 max-h-32 overflow-auto space-y-0.5">
+                                                {lr.zeroClick.map((z, i) => (<div key={i} className="text-zinc-500">${z.cost} · {z.kname} <span className="text-zinc-700">#{z.id}</span></div>))}
+                                            </div>
+                                        </details>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="border-t border-zinc-800 pt-2 text-[10px] text-zinc-600">Запусков ещё не было.</div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         // --- KEITARO PANEL (campaign <-> Keitaro mapping table) ---
         const KeitaroPanel = () => {
             const { useState, useEffect } = React;
@@ -3008,6 +3097,7 @@ function ensureSharing(sheetId, props) {
                                     <div className="flex items-center gap-2">
                                         <i className="fas fa-bullseye text-cyan-400"></i>
                                         <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider">Keitaro</h3>
+                                        <KeitaroExportButton />
                                     </div>
                                     <button
                                         type="button"

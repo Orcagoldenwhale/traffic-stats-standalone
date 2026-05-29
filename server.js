@@ -498,6 +498,152 @@ if (KEITARO_URL && KEITARO_TOKEN) {
     setInterval(() => { loadKeitaroStats().catch(e => console.error('[Keitaro] re-warm failed:', e.message)); }, 25 * 60 * 1000);
 }
 
+// --- Keitaro daily cost auto-export (push yesterday's spend into Keitaro) ---
+const KEITARO_EXPORT_FILE = join(__dirname, 'saved_sessions', '_keitaro_export.json');
+const KEITARO_EXPORT_TZ_OFFSET = 1; // server local = UTC+1 (same basis as the daily snapshot)
+let keitaroExport = { enabled: true, time: '10:00', lastRunDate: null, lastRun: null };
+let keitaroExportRunning = false;
+
+async function loadKeitaroExport() {
+    try {
+        if (!existsSync(KEITARO_EXPORT_FILE)) return;
+        const s = JSON.parse(await readFile(KEITARO_EXPORT_FILE, 'utf-8'));
+        keitaroExport = { ...keitaroExport, ...s };
+    } catch (e) { console.error('[KeitaroExport] load failed:', e.message); }
+}
+async function saveKeitaroExport() {
+    try {
+        const tmp = KEITARO_EXPORT_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+        await writeFile(tmp, JSON.stringify(keitaroExport, null, 2), 'utf-8');
+        await rename(tmp, KEITARO_EXPORT_FILE);
+    } catch (e) { console.error('[KeitaroExport] save failed:', e.message); }
+}
+await loadKeitaroExport();
+
+// Local (UTC+1) calendar date for a timestamp — matches the "Google Ads day" convention used for snapshots.
+function keitaroLocalDate(ms) {
+    const d = new Date(ms + KEITARO_EXPORT_TZ_OFFSET * 3600 * 1000);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+// Push the snapshot day's spend for every linked campaign into Keitaro via update_costs (Europe/Moscow window).
+async function runKeitaroCostExport(trigger) {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return { ok: false, error: 'Keitaro не настроен' };
+    if (keitaroExportRunning) return { ok: false, error: 'Уже выполняется' };
+    if (!existsSync(KEITARO_LINKS_FILE)) return { ok: false, error: 'Нет связей' };
+    keitaroExportRunning = true;
+    try {
+        const links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8'));
+        let snapAt = null;
+        const costByName = {};
+        for (const f of [TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE, TRAFFIC_DATA_SNAPSHOT_FILE]) {
+            if (!existsSync(f)) continue;
+            const d = JSON.parse(await readFile(f, 'utf-8'));
+            if (d.snapshotAt && !snapAt) snapAt = d.snapshotAt;
+            for (const v of Object.values(d.data || {})) {
+                const cn = v.customName; if (!cn) continue;
+                const c = (v.stats && v.stats.today && +v.stats.today.cost) || 0;
+                if (costByName[cn] == null || c > costByName[cn]) costByName[cn] = c; // max across datasets
+            }
+        }
+        if (!snapAt) return { ok: false, error: 'Нет снапшота' };
+        const day = keitaroLocalDate(new Date(snapAt).getTime());
+
+        const byId = {};
+        for (const [cn, link] of Object.entries(links)) {
+            const cost = costByName[cn] || 0;
+            if (!byId[link.id]) byId[link.id] = { id: link.id, kname: link.name, cost: 0, cns: [] };
+            byId[link.id].cost += cost;
+            if (cost > 0) byId[link.id].cns.push(cn);
+        }
+        const targets = Object.values(byId).filter(z => z.cost > 0.0001).map(z => ({ ...z, cost: +z.cost.toFixed(2) }));
+
+        const win = { start_date: day + ' 00:00:00', end_date: day + ' 23:59:59', timezone: 'Europe/Moscow', currency: 'USD' };
+        let okCount = 0, failCount = 0;
+        const CONC = 6;
+        for (let i = 0; i < targets.length; i += CONC) {
+            await Promise.all(targets.slice(i, i + CONC).map(async t => {
+                try {
+                    const res = await fetch(`${KEITARO_URL}/admin_api/v1/campaigns/${t.id}/update_costs`, {
+                        method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ...win, cost: String(t.cost) })
+                    });
+                    if (res.ok) okCount++; else failCount++;
+                } catch { failCount++; }
+            }));
+        }
+        const sentTotal = targets.reduce((s, t) => s + t.cost, 0);
+
+        // verify clicks → which linked campaigns can't receive cost (0 Keitaro clicks that day)
+        let zeroClick = [];
+        try {
+            const rr = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
+                method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ range: { from: day, to: day, timezone: 'Europe/Moscow' }, dimensions: ['campaign_id'], measures: ['clicks'] })
+            });
+            if (rr.ok) {
+                const j = await rr.json();
+                const clicks = {};
+                for (const row of (j.rows || [])) clicks[row.campaign_id] = row.clicks || 0;
+                zeroClick = targets.filter(t => (clicks[t.id] || 0) === 0).map(t => ({ id: t.id, kname: t.kname, cost: t.cost, cns: t.cns }));
+            }
+        } catch (e) { /* verify is best-effort */ }
+        const notLanded = zeroClick.reduce((s, t) => s + t.cost, 0);
+
+        const result = {
+            at: new Date().toISOString(), trigger: trigger || 'manual', day,
+            campaigns: targets.length, ok: okCount, failed: failCount,
+            sentTotal: +sentTotal.toFixed(2), landed: +(sentTotal - notLanded).toFixed(2),
+            notLanded: +notLanded.toFixed(2), zeroClick
+        };
+        keitaroExport.lastRun = result;
+        await saveKeitaroExport();
+        auditLog('KEITARO_EXPORT', 'keitaro', `${result.trigger} day=${day} sent=$${result.sentTotal} camps=${targets.length} landed=$${result.landed} zero=${zeroClick.length}`, { ip: 'server' });
+        console.log(`[KeitaroExport] ${result.trigger} day=${day}: sent $${result.sentTotal} / ${targets.length} camps (ok ${okCount}, fail ${failCount}); didn't land $${result.notLanded}/${zeroClick.length}`);
+        return { ok: true, result };
+    } catch (e) {
+        console.error('[KeitaroExport] run failed:', e.message);
+        return { ok: false, error: e.message };
+    } finally {
+        keitaroExportRunning = false;
+    }
+}
+
+app.get('/api/keitaro/export-settings', (req, res) => {
+    res.json({ enabled: !!keitaroExport.enabled, time: keitaroExport.time || '10:00', lastRun: keitaroExport.lastRun || null, running: keitaroExportRunning });
+});
+app.post('/api/keitaro/export-settings', async (req, res) => {
+    const { enabled, time } = req.body || {};
+    if (time !== undefined) {
+        if (typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return res.status(400).json({ error: 'time must be HH:MM' });
+        keitaroExport.time = time;
+    }
+    if (typeof enabled === 'boolean') keitaroExport.enabled = enabled;
+    await saveKeitaroExport();
+    auditLog('KEITARO_EXPORT_CFG', 'keitaro', `enabled=${keitaroExport.enabled} time=${keitaroExport.time}`, req);
+    res.json({ ok: true, enabled: keitaroExport.enabled, time: keitaroExport.time });
+});
+app.post('/api/keitaro/export-run', async (req, res) => {
+    const r = await runKeitaroCostExport('manual');
+    if (!r.ok) return res.status(r.error === 'Уже выполняется' ? 409 : 400).json({ error: r.error });
+    res.json(r);
+});
+
+// Scheduler: once per day at the configured local (UTC+1) time push the snapshot day's spend.
+setInterval(() => {
+    if (!keitaroExport.enabled || keitaroExportRunning) return;
+    const now = new Date();
+    const localH = (now.getUTCHours() + KEITARO_EXPORT_TZ_OFFSET) % 24;
+    const localM = now.getUTCMinutes();
+    const dateStr = keitaroLocalDate(now.getTime());
+    const [th, tm] = String(keitaroExport.time || '10:00').split(':').map(n => parseInt(n, 10));
+    if (localH === th && localM === tm && keitaroExport.lastRunDate !== dateStr) {
+        keitaroExport.lastRunDate = dateStr;
+        saveKeitaroExport();
+        runKeitaroCostExport('schedule').catch(e => console.error('[KeitaroExport] scheduled run failed:', e.message));
+    }
+}, 60000);
+
 if (existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));
 }
