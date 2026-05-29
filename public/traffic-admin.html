@@ -1398,6 +1398,8 @@ function ensureSharing(sheetId, props) {
             const [sortBy, setSortBy] = useState('cost');
             const [sortDir, setSortDir] = useState('desc');
             const [onlyLinked, setOnlyLinked] = useState(false);
+            const [expandedRow, setExpandedRow] = useState(null);
+            const [offers, setOffers] = useState({});
 
             useEffect(() => {
                 (async () => {
@@ -1419,9 +1421,10 @@ function ensureSharing(sheetId, props) {
                                 if (c && c.customStatus === 'live') {
                                     const n = (c.customName || c.name || '').trim(); if (!n) continue;
                                     names.add(n);
-                                    const m = mstats[n] || (mstats[n] = { cost: 0, clicks: 0 });
+                                    const m = mstats[n] || (mstats[n] = { cost: 0, clicks: 0, pk: '' });
                                     m.cost += Number(c.stats && c.stats.allTime && c.stats.allTime.cost) || 0;
                                     m.clicks += Number(c.stats && c.stats.allTime && c.stats.allTime.clicks) || 0;
+                                    if (!m.pk && c.primaryKeyword) m.pk = c.primaryKeyword;
                                 }
                             }
                         }
@@ -1463,7 +1466,7 @@ function ensureSharing(sheetId, props) {
                 const sales = ks ? (ks.sales || 0) : null;
                 const kclicks = ks ? (ks.clicks || 0) : null;
                 return {
-                    name, linked: !!linked, cost: my.cost, clicks: my.clicks,
+                    name, linked: !!linked, kid: linked ? linked.id : null, pk: my.pk || '', cost: my.cost, clicks: my.clicks,
                     revenue: ks ? (ks.revenue || 0) : null, kclicks, conv, sales,
                     c2r: (ks && kclicks > 0) ? (conv / kclicks * 100) : null,
                     r2d: (ks && conv > 0) ? (sales / conv * 100) : null
@@ -1479,6 +1482,18 @@ function ensureSharing(sheetId, props) {
             const sortTh = (k, label, right) => (
                 <th onClick={() => { if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc'); else { setSortBy(k); setSortDir('desc'); } }} className={`px-3 py-2 font-bold cursor-pointer select-none hover:text-zinc-300 whitespace-nowrap ${right ? 'text-right' : ''}`}>{label}{sortBy === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
             );
+
+            const toggleRow = async (r) => {
+                if (expandedRow === r.name) { setExpandedRow(null); return; }
+                setExpandedRow(r.name);
+                if (r.linked && r.kid && !offers[r.name]) {
+                    setOffers(p => ({ ...p, [r.name]: { loading: true } }));
+                    try {
+                        const j = await fetch('/api/keitaro/offers?id=' + r.kid).then(x => x.ok ? x.json() : { offers: [] });
+                        setOffers(p => ({ ...p, [r.name]: { loading: false, list: j.offers || [] } }));
+                    } catch (e) { setOffers(p => ({ ...p, [r.name]: { loading: false, list: [] } })); }
+                }
+            };
 
             if (loading) return <div className="flex items-center justify-center h-full text-zinc-500 text-sm"><i className="fas fa-spinner fa-spin mr-2"></i> Загрузка...</div>;
 
@@ -1578,8 +1593,9 @@ function ensureSharing(sheetId, props) {
                             </thead>
                             <tbody>
                                 {sortedRows.map(r => (
-                                    <tr key={r.name} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60">
-                                        <td className="px-3 py-2 text-zinc-200">{r.name}</td>
+                                    <React.Fragment key={r.name}>
+                                    <tr onClick={() => toggleRow(r)} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60 cursor-pointer">
+                                        <td className="px-3 py-2 text-zinc-200"><i className={`fas fa-chevron-${expandedRow === r.name ? 'down' : 'right'} text-[9px] text-zinc-600 mr-2`}></i>{r.name}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">${r.cost.toFixed(2)}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.revenue != null ? <span className="text-green-400">${r.revenue.toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">{r.clicks}</td>
@@ -1589,6 +1605,35 @@ function ensureSharing(sheetId, props) {
                                         <td className="px-3 py-2 text-right font-mono">{r.c2r != null ? <span className="text-zinc-300">{r.c2r.toFixed(1)}%</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.r2d != null ? <span className="text-zinc-300">{r.r2d.toFixed(1)}%</span> : <span className="text-zinc-600">—</span>}</td>
                                     </tr>
+                                    {expandedRow === r.name && (
+                                        <tr className="bg-zinc-950/60">
+                                            <td colSpan="9" className="px-6 py-3">
+                                                <div className="flex flex-col gap-3 text-xs">
+                                                    <div><span className="text-zinc-500 uppercase tracking-wider text-[10px] mr-2">Основной ключ:</span>{r.pk ? <span className="text-amber-300 font-bold"><i className="fas fa-star mr-1 text-[9px]"></i>{r.pk}</span> : <span className="text-zinc-600">—</span>}</div>
+                                                    <div>
+                                                        <div className="text-zinc-500 uppercase tracking-wider text-[10px] mb-1">Офферы / доход:</div>
+                                                        {!r.linked ? <div className="text-zinc-600">кампания не связана с Keitaro</div>
+                                                            : (offers[r.name] && offers[r.name].loading) ? <div className="text-zinc-500"><i className="fas fa-spinner fa-spin mr-1.5"></i>загрузка офферов…</div>
+                                                            : (offers[r.name] && offers[r.name].list) ? (
+                                                                offers[r.name].list.length === 0 ? <div className="text-zinc-600">офферов нет</div> :
+                                                                <table className="w-full max-w-3xl">
+                                                                    <tbody>
+                                                                        {offers[r.name].list.map((o, i) => (
+                                                                            <tr key={i} className="border-t border-zinc-800/40">
+                                                                                <td className="py-1 pr-4 text-zinc-300">{o.offer}</td>
+                                                                                <td className="py-1 px-3 text-right text-green-400 font-mono whitespace-nowrap">${o.revenue.toFixed(2)}</td>
+                                                                                <td className="py-1 pl-3 text-right text-zinc-500 font-mono whitespace-nowrap" title="конверсии / продажи">{o.conversions} / {o.sales}</td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                            ) : <div className="text-zinc-600">—</div>}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                    </React.Fragment>
                                 ))}
                                 {sortedRows.length === 0 && (
                                     <tr><td colSpan="9" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет кампаний</td></tr>

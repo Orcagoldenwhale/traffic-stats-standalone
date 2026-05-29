@@ -405,27 +405,65 @@ app.post('/api/keitaro/links', async (req, res) => {
     }
 });
 
+// All-time range for these campaigns (created 2026); narrower span = much faster than 2020-2035.
+const keitaroRange = () => ({ from: '2026-01-01', to: new Date(Date.now() + 86400000).toISOString().slice(0, 10), timezone: 'Europe/Moscow' });
+const KEITARO_STATS_TTL = 30 * 60 * 1000;
+
 let keitaroStatsCache = { at: 0, data: null };
+async function loadKeitaroStats() {
+    const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
+        method: 'POST',
+        headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ range: keitaroRange(), dimensions: ['campaign_id'], measures: ['clicks', 'revenue', 'conversions', 'sales'] })
+    });
+    if (!r.ok) throw new Error('Keitaro API ' + r.status);
+    const j = await r.json();
+    const out = {};
+    for (const row of (j.rows || [])) { out[row.campaign_id] = { clicks: row.clicks || 0, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0 }; }
+    keitaroStatsCache = { at: Date.now(), data: { stats: out } };
+    return keitaroStatsCache.data;
+}
 app.get('/api/keitaro/stats', async (req, res) => {
     if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
     try {
-        if (keitaroStatsCache.data && Date.now() - keitaroStatsCache.at < 5 * 60 * 1000) return res.json(keitaroStatsCache.data);
-        const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
-            method: 'POST',
-            headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ range: { from: '2020-01-01', to: '2035-12-31', timezone: 'Europe/Moscow' }, dimensions: ['campaign_id'], measures: ['clicks', 'revenue', 'conversions', 'sales'] })
-        });
-        if (!r.ok) return res.status(502).json({ error: `Keitaro API ${r.status}` });
-        const j = await r.json();
-        const out = {};
-        for (const row of (j.rows || [])) { out[row.campaign_id] = { clicks: row.clicks || 0, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0 }; }
-        keitaroStatsCache = { at: Date.now(), data: { stats: out } };
-        res.json({ stats: out });
+        if (keitaroStatsCache.data && Date.now() - keitaroStatsCache.at < KEITARO_STATS_TTL) return res.json(keitaroStatsCache.data);
+        res.json(await loadKeitaroStats());
     } catch (e) {
         console.error('[Keitaro] stats fetch failed:', e.message);
         res.status(502).json({ error: e.message });
     }
 });
+
+// Offers per campaign (on-demand for the expand panel, cached per campaign)
+const keitaroOffersCache = new Map();
+app.get('/api/keitaro/offers', async (req, res) => {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
+    const id = parseInt(req.query.id, 10);
+    if (!id) return res.status(400).json({ error: 'id required' });
+    try {
+        const cached = keitaroOffersCache.get(id);
+        if (cached && Date.now() - cached.at < KEITARO_STATS_TTL) return res.json({ offers: cached.offers });
+        const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
+            method: 'POST',
+            headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ range: keitaroRange(), dimensions: ['offer'], measures: ['revenue', 'conversions', 'sales', 'clicks'], filters: [{ name: 'campaign_id', operator: 'EQUALS', expression: id }] })
+        });
+        if (!r.ok) return res.status(502).json({ error: `Keitaro API ${r.status}` });
+        const j = await r.json();
+        const offers = (j.rows || []).map(row => ({ offer: row.offer, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0, clicks: row.clicks || 0 }));
+        keitaroOffersCache.set(id, { at: Date.now(), offers });
+        res.json({ offers });
+    } catch (e) {
+        console.error('[Keitaro] offers fetch failed:', e.message);
+        res.status(502).json({ error: e.message });
+    }
+});
+
+// Pre-warm stats on startup + keep warm so the "Кампании" tab loads instantly.
+if (KEITARO_URL && KEITARO_TOKEN) {
+    setTimeout(() => { loadKeitaroStats().then(() => console.log('[Keitaro] stats pre-warmed')).catch(e => console.error('[Keitaro] pre-warm failed:', e.message)); }, 8000);
+    setInterval(() => { loadKeitaroStats().catch(e => console.error('[Keitaro] re-warm failed:', e.message)); }, 25 * 60 * 1000);
+}
 
 if (existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));
