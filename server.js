@@ -405,6 +405,28 @@ app.post('/api/keitaro/links', async (req, res) => {
     }
 });
 
+let keitaroStatsCache = { at: 0, data: null };
+app.get('/api/keitaro/stats', async (req, res) => {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
+    try {
+        if (keitaroStatsCache.data && Date.now() - keitaroStatsCache.at < 5 * 60 * 1000) return res.json(keitaroStatsCache.data);
+        const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
+            method: 'POST',
+            headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ range: { from: '2020-01-01', to: '2035-12-31', timezone: 'Europe/Moscow' }, dimensions: ['campaign_id'], measures: ['clicks', 'revenue', 'conversions', 'sales'] })
+        });
+        if (!r.ok) return res.status(502).json({ error: `Keitaro API ${r.status}` });
+        const j = await r.json();
+        const out = {};
+        for (const row of (j.rows || [])) { out[row.campaign_id] = { clicks: row.clicks || 0, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0 }; }
+        keitaroStatsCache = { at: Date.now(), data: { stats: out } };
+        res.json({ stats: out });
+    } catch (e) {
+        console.error('[Keitaro] stats fetch failed:', e.message);
+        res.status(502).json({ error: e.message });
+    }
+});
+
 if (existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));
 }

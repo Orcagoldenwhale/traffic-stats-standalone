@@ -1392,29 +1392,42 @@ function ensureSharing(sheetId, props) {
             const [openRow, setOpenRow] = useState(null);
             const [search, setSearch] = useState('');
             const [filter, setFilter] = useState('');
+            const [tab, setTab] = useState('links');
+            const [myStats, setMyStats] = useState({});
+            const [kStats, setKStats] = useState({});
 
             useEffect(() => {
                 (async () => {
                     setLoading(true); setError('');
                     try {
-                        const [adm, st, kc, lk] = await Promise.all([
+                        const [adm, st, kc, lk, ks] = await Promise.all([
                             fetch('/api/traffic-admin-data').then(r => r.ok ? r.json() : { data: {} }).catch(() => ({ data: {} })),
                             fetch('/api/traffic-data').then(r => r.ok ? r.json() : { data: {} }).catch(() => ({ data: {} })),
                             fetch('/api/keitaro/campaigns').then(r => r.json()).catch(e => ({ error: String((e && e.message) || e) })),
-                            fetch('/api/keitaro/links').then(r => r.json()).catch(() => ({ links: {} }))
+                            fetch('/api/keitaro/links').then(r => r.json()).catch(() => ({ links: {} })),
+                            fetch('/api/keitaro/stats').then(r => r.ok ? r.json() : { stats: {} }).catch(() => ({ stats: {} }))
                         ]);
                         const names = new Set();
+                        const mstats = {};
                         for (const src of [adm, st]) {
                             const data = (src && src.data) || {};
                             for (const k of Object.keys(data)) {
                                 const c = data[k];
-                                if (c && c.customStatus === 'live') { const n = (c.customName || c.name || '').trim(); if (n) names.add(n); }
+                                if (c && c.customStatus === 'live') {
+                                    const n = (c.customName || c.name || '').trim(); if (!n) continue;
+                                    names.add(n);
+                                    const m = mstats[n] || (mstats[n] = { cost: 0, clicks: 0 });
+                                    m.cost += Number(c.stats && c.stats.allTime && c.stats.allTime.cost) || 0;
+                                    m.clicks += Number(c.stats && c.stats.allTime && c.stats.allTime.clicks) || 0;
+                                }
                             }
                         }
                         setMyCamps([...names].sort((a, b) => a.localeCompare(b, 'ru')));
+                        setMyStats(mstats);
                         if (kc && kc.error) setError('Keitaro: ' + kc.error);
                         else setKCamps(Array.isArray(kc) ? kc : []);
                         setLinks((lk && lk.links) ? lk.links : {});
+                        setKStats((ks && ks.stats) ? ks.stats : {});
                     } catch (e) { setError(e.message); }
                     setLoading(false);
                 })();
@@ -1443,11 +1456,16 @@ function ensureSharing(sheetId, props) {
 
             return (
                 <div className="flex flex-col h-full">
+                    <div className="flex items-center gap-1 mb-3 border-b border-zinc-800">
+                        <button type="button" onClick={() => setTab('links')} className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 -mb-px transition-colors ${tab === 'links' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>Связь</button>
+                        <button type="button" onClick={() => setTab('campaigns')} className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 -mb-px transition-colors ${tab === 'campaigns' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>Кампании</button>
+                    </div>
                     <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
                         <div className="text-xs text-zinc-400">Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b>{dupCount > 0 && <span> · дубли: <b className="text-amber-400">{dupCount}</b></span>}</div>
                         <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Фильтр моих кампаний..." className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 rounded px-3 py-1.5 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-zinc-600" />
                     </div>
                     {error && <div className="text-red-400 text-xs mb-2">{error}</div>}
+                    {tab === 'links' && (
                     <div className="flex-1 overflow-auto border border-zinc-800 rounded-lg">
                         <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-zinc-950 z-10">
@@ -1505,6 +1523,41 @@ function ensureSharing(sheetId, props) {
                             </tbody>
                         </table>
                     </div>
+                    )}
+                    {tab === 'campaigns' && (
+                    <div className="flex-1 overflow-auto border border-zinc-800 rounded-lg">
+                        <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-zinc-950 z-10">
+                                <tr className="text-left text-zinc-500 uppercase tracking-wider text-[10px]">
+                                    <th className="px-3 py-2 font-bold">Кампания (live)</th>
+                                    <th className="px-3 py-2 font-bold text-right">Расход</th>
+                                    <th className="px-3 py-2 font-bold text-right">Доход</th>
+                                    <th className="px-3 py-2 font-bold text-right">Клики (наши)</th>
+                                    <th className="px-3 py-2 font-bold text-right">Клики (Keitaro)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {visibleCamps.map(name => {
+                                    const linked = links[name];
+                                    const my = myStats[name] || { cost: 0, clicks: 0 };
+                                    const ks = linked ? kStats[linked.id] : null;
+                                    return (
+                                        <tr key={name} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60">
+                                            <td className="px-3 py-2 text-zinc-200">{name}</td>
+                                            <td className="px-3 py-2 text-right text-zinc-300 font-mono">${my.cost.toFixed(2)}</td>
+                                            <td className="px-3 py-2 text-right font-mono">{ks ? <span className="text-green-400">${(ks.revenue || 0).toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
+                                            <td className="px-3 py-2 text-right text-zinc-300 font-mono">{my.clicks}</td>
+                                            <td className="px-3 py-2 text-right font-mono">{ks ? <span className="text-cyan-400">{ks.clicks || 0}</span> : <span className="text-zinc-600">—</span>}</td>
+                                        </tr>
+                                    );
+                                })}
+                                {visibleCamps.length === 0 && (
+                                    <tr><td colSpan="5" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет боевых кампаний</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    )}
                 </div>
             );
         };
