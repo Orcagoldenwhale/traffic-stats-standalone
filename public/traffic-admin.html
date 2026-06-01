@@ -1531,6 +1531,8 @@ function ensureSharing(sheetId, props) {
         const KeitaroPanel = () => {
             const { useState, useEffect } = React;
             const [myCamps, setMyCamps] = useState([]);
+            const [bannedCamps, setBannedCamps] = useState([]);
+            const [showBanned, setShowBanned] = useState(false);
             const [kCamps, setKCamps] = useState([]);
             const [links, setLinks] = useState({});
             const [loading, setLoading] = useState(true);
@@ -1558,23 +1560,28 @@ function ensureSharing(sheetId, props) {
                             fetch('/api/keitaro/links').then(r => r.json()).catch(() => ({ links: {} })),
                             fetch('/api/keitaro/stats').then(r => r.ok ? r.json() : { stats: {} }).catch(() => ({ stats: {} }))
                         ]);
-                        const names = new Set();
+                        const liveNames = new Set();
+                        const bannedNames = new Set();
+                        const linkMap = (lk && lk.links) ? lk.links : {};
                         const mstats = {};
                         for (const src of [adm, st]) {
                             const data = (src && src.data) || {};
                             for (const k of Object.keys(data)) {
                                 const c = data[k];
-                                if (c && c.customStatus === 'live') {
-                                    const n = (c.customName || c.name || '').trim(); if (!n) continue;
-                                    names.add(n);
-                                    const m = mstats[n] || (mstats[n] = { cost: 0, clicks: 0, pk: '' });
-                                    m.cost += Number(c.stats && c.stats.allTime && c.stats.allTime.cost) || 0;
-                                    m.clicks += Number(c.stats && c.stats.allTime && c.stats.allTime.clicks) || 0;
-                                    if (!m.pk && c.primaryKeyword) m.pk = c.primaryKeyword;
-                                }
+                                if (!c) continue;
+                                const n = (c.customName || c.name || '').trim(); if (!n) continue;
+                                const isLive = c.customStatus === 'live';
+                                const isBannedLinked = c.customStatus === 'ban' && !!linkMap[n];
+                                if (!isLive && !isBannedLinked) continue;
+                                if (isLive) liveNames.add(n); else bannedNames.add(n);
+                                const m = mstats[n] || (mstats[n] = { cost: 0, clicks: 0, pk: '' });
+                                m.cost += Number(c.stats && c.stats.allTime && c.stats.allTime.cost) || 0;
+                                m.clicks += Number(c.stats && c.stats.allTime && c.stats.allTime.clicks) || 0;
+                                if (!m.pk && c.primaryKeyword) m.pk = c.primaryKeyword;
                             }
                         }
-                        setMyCamps([...names].sort((a, b) => a.localeCompare(b, 'ru')));
+                        setMyCamps([...liveNames].sort((a, b) => a.localeCompare(b, 'ru')));
+                        setBannedCamps([...bannedNames].filter(n => !liveNames.has(n)).sort((a, b) => a.localeCompare(b, 'ru')));
                         setMyStats(mstats);
                         if (kc && kc.error) setError('Keitaro: ' + kc.error);
                         else setKCamps(Array.isArray(kc) ? kc : []);
@@ -1599,7 +1606,9 @@ function ensureSharing(sheetId, props) {
                 return arr.slice(0, 50);
             };
 
-            const visibleCamps = filter.trim() ? myCamps.filter(n => n.toLowerCase().includes(filter.trim().toLowerCase())) : myCamps;
+            const bannedSet = new Set(bannedCamps);
+            const baseCamps = showBanned ? [...myCamps, ...bannedCamps] : myCamps;
+            const visibleCamps = filter.trim() ? baseCamps.filter(n => n.toLowerCase().includes(filter.trim().toLowerCase())) : baseCamps;
             const idCount = {};
             for (const v of Object.values(links)) { if (v && v.id != null) idCount[v.id] = (idCount[v.id] || 0) + 1; }
             const dupCount = Object.values(idCount).filter(n => n > 1).length;
@@ -1612,7 +1621,7 @@ function ensureSharing(sheetId, props) {
                 const sales = ks ? (ks.sales || 0) : null;
                 const kclicks = ks ? (ks.clicks || 0) : null;
                 return {
-                    name, linked: !!linked, kid: linked ? linked.id : null, pk: my.pk || '', cost: my.cost, clicks: my.clicks,
+                    name, banned: bannedSet.has(name), linked: !!linked, kid: linked ? linked.id : null, pk: my.pk || '', cost: my.cost, clicks: my.clicks,
                     revenue: ks ? (ks.revenue || 0) : null, kclicks, conv, sales,
                     c2r: (ks && kclicks > 0) ? (conv / kclicks * 100) : null,
                     r2d: (ks && conv > 0) ? (sales / conv * 100) : null
@@ -1651,10 +1660,14 @@ function ensureSharing(sheetId, props) {
                     </div>
                     <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
                         {tab === 'links' ? (
-                            <div className="text-xs text-zinc-400">Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b>{dupCount > 0 && <span> · дубли: <b className="text-amber-400">{dupCount}</b></span>}</div>
+                            <div className="flex items-center gap-3 text-xs text-zinc-400 flex-wrap">
+                                <span>Боевых: <b className="text-zinc-200">{myCamps.length}</b> · связано: <b className="text-cyan-400">{Object.keys(links).length}</b> · в Keitaro: <b className="text-zinc-200">{kCamps.length}</b>{dupCount > 0 && <span> · дубли: <b className="text-amber-400">{dupCount}</b></span>}{showBanned && bannedCamps.length > 0 && <span> · в бане: <b className="text-red-400">{bannedCamps.length}</b></span>}</span>
+                                <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-zinc-200"><input type="checkbox" checked={showBanned} onChange={e => setShowBanned(e.target.checked)} className="accent-amber-500" /> показывать в бане{bannedCamps.length > 0 && <span className="text-zinc-600"> ({bannedCamps.length})</span>}</label>
+                            </div>
                         ) : (
-                            <div className="flex items-center gap-3 text-xs text-zinc-400">
+                            <div className="flex items-center gap-3 text-xs text-zinc-400 flex-wrap">
                                 <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-zinc-200"><input type="checkbox" checked={onlyLinked} onChange={e => setOnlyLinked(e.target.checked)} className="accent-cyan-500" /> только связанные</label>
+                                <label className="flex items-center gap-1.5 cursor-pointer select-none hover:text-zinc-200"><input type="checkbox" checked={showBanned} onChange={e => setShowBanned(e.target.checked)} className="accent-amber-500" /> показывать в бане{bannedCamps.length > 0 && <span className="text-zinc-600"> ({bannedCamps.length})</span>}</label>
                                 <span>показано: <b className="text-zinc-200">{sortedRows.length}</b></span>
                                 <span className="text-zinc-600 hidden sm:inline">сортировка — клик по колонке</span>
                             </div>
@@ -1667,7 +1680,7 @@ function ensureSharing(sheetId, props) {
                         <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-zinc-950 z-10">
                                 <tr className="text-left text-zinc-500 uppercase tracking-wider text-[10px]">
-                                    <th className="px-3 py-2 font-bold w-1/2">Моя кампания (live)</th>
+                                    <th className="px-3 py-2 font-bold w-1/2">Моя кампания</th>
                                     <th className="px-3 py-2 font-bold">Кампания в Keitaro</th>
                                 </tr>
                             </thead>
@@ -1676,9 +1689,10 @@ function ensureSharing(sheetId, props) {
                                     const linked = links[name];
                                     const isOpen = openRow === name;
                                     const isDup = linked && idCount[linked.id] > 1;
+                                    const isBanned = bannedSet.has(name);
                                     return (
-                                        <tr key={name} className={`border-t transition-colors hover:bg-zinc-700/60 ${isDup ? 'bg-amber-500/10 border-amber-500/30' : 'border-zinc-800/60'}`}>
-                                            <td className="px-3 py-2 text-zinc-200 align-top">{name}</td>
+                                        <tr key={name} className={`border-t transition-colors hover:bg-zinc-700/60 ${isDup ? 'bg-amber-500/10 border-amber-500/30' : 'border-zinc-800/60'} ${isBanned ? 'opacity-60' : ''}`}>
+                                            <td className={`px-3 py-2 align-top ${isBanned ? 'text-zinc-400' : 'text-zinc-200'}`}>{name}{isBanned && <span className="ml-2 text-[9px] font-bold text-red-400 uppercase tracking-wider">бан</span>}</td>
                                             <td className="px-3 py-2 align-top">
                                                 {linked && !isOpen ? (
                                                     <div className="flex items-center gap-2 flex-wrap">
@@ -1715,7 +1729,7 @@ function ensureSharing(sheetId, props) {
                                     );
                                 })}
                                 {visibleCamps.length === 0 && (
-                                    <tr><td colSpan="2" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет боевых кампаний</td></tr>
+                                    <tr><td colSpan="2" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет кампаний</td></tr>
                                 )}
                             </tbody>
                         </table>
@@ -1741,7 +1755,7 @@ function ensureSharing(sheetId, props) {
                                 {sortedRows.map(r => (
                                     <React.Fragment key={r.name}>
                                     <tr onClick={() => toggleRow(r)} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60 cursor-pointer">
-                                        <td className="px-3 py-2 text-zinc-200"><i className={`fas fa-chevron-${expandedRow === r.name ? 'down' : 'right'} text-[9px] text-zinc-600 mr-2`}></i>{r.name}</td>
+                                        <td className={`px-3 py-2 ${r.banned ? 'text-zinc-400' : 'text-zinc-200'}`}><i className={`fas fa-chevron-${expandedRow === r.name ? 'down' : 'right'} text-[9px] text-zinc-600 mr-2`}></i>{r.name}{r.banned && <span className="ml-2 text-[9px] font-bold text-red-400 uppercase tracking-wider">бан</span>}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">${r.cost.toFixed(2)}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.revenue != null ? <span className="text-green-400">${r.revenue.toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">{r.clicks}</td>
