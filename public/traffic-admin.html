@@ -1623,6 +1623,9 @@ function ensureSharing(sheetId, props) {
                 return {
                     name, banned: bannedSet.has(name), linked: !!linked, kid: linked ? linked.id : null, pk: my.pk || '', cost: my.cost, clicks: my.clicks,
                     revenue: ks ? (ks.revenue || 0) : null, kclicks, conv, sales,
+                    cpc: my.clicks > 0 ? (my.cost / my.clicks) : null,
+                    roi: (ks && my.cost > 0) ? (((ks.revenue || 0) - my.cost) / my.cost * 100) : null,
+                    match: (ks && my.clicks > 0) ? ((ks.clicks || 0) / my.clicks * 100) : null,
                     c2r: (ks && kclicks > 0) ? (conv / kclicks * 100) : null,
                     r2d: (ks && conv > 0) ? (sales / conv * 100) : null
                 };
@@ -1742,9 +1745,12 @@ function ensureSharing(sheetId, props) {
                                 <tr className="text-left text-zinc-500 uppercase tracking-wider text-[10px]">
                                     {sortTh('name', 'Кампания', false)}
                                     {sortTh('cost', 'Расход', true)}
+                                    {sortTh('cpc', 'CPC', true)}
                                     {sortTh('revenue', 'Доход', true)}
+                                    {sortTh('roi', 'ROI', true)}
                                     {sortTh('clicks', 'Клики (наши)', true)}
                                     {sortTh('kclicks', 'Клики (Keitaro)', true)}
+                                    {sortTh('match', '% соответствия', true)}
                                     {sortTh('conv', 'Конв.', true)}
                                     {sortTh('sales', 'Продажи', true)}
                                     {sortTh('c2r', '% клик→рега', true)}
@@ -1757,9 +1763,12 @@ function ensureSharing(sheetId, props) {
                                     <tr onClick={() => toggleRow(r)} className="border-t border-zinc-800/60 transition-colors hover:bg-zinc-700/60 cursor-pointer">
                                         <td className={`px-3 py-2 ${r.banned ? 'text-zinc-400' : 'text-zinc-200'}`}><i className={`fas fa-chevron-${expandedRow === r.name ? 'down' : 'right'} text-[9px] text-zinc-600 mr-2`}></i>{r.name}{r.banned && <span className="ml-2 text-[9px] font-bold text-red-400 uppercase tracking-wider">бан</span>}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">${r.cost.toFixed(2)}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.cpc != null ? <span className="text-zinc-300">${r.cpc.toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.revenue != null ? <span className="text-green-400">${r.revenue.toFixed(2)}</span> : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.roi != null ? <span className={r.roi >= 0 ? 'text-green-400' : 'text-red-400'}>{r.roi >= 0 ? '+' : ''}{r.roi.toFixed(0)}%</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right text-zinc-300 font-mono">{r.clicks}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.kclicks != null ? <span className="text-cyan-400">{r.kclicks}</span> : <span className="text-zinc-600">—</span>}</td>
+                                        <td className="px-3 py-2 text-right font-mono">{r.match != null ? <span className={r.match >= 80 ? 'text-green-400' : r.match >= 50 ? 'text-amber-400' : 'text-red-400'}>{r.match.toFixed(0)}%</span> : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.conv != null ? r.conv : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.sales != null ? r.sales : <span className="text-zinc-600">—</span>}</td>
                                         <td className="px-3 py-2 text-right font-mono">{r.c2r != null ? <span className="text-zinc-300">{r.c2r.toFixed(1)}%</span> : <span className="text-zinc-600">—</span>}</td>
@@ -1767,7 +1776,7 @@ function ensureSharing(sheetId, props) {
                                     </tr>
                                     {expandedRow === r.name && (
                                         <tr className="bg-zinc-950/60">
-                                            <td colSpan="9" className="px-6 py-3">
+                                            <td colSpan="12" className="px-6 py-3">
                                                 <div className="flex flex-col gap-3 text-xs">
                                                     <div><span className="text-zinc-500 uppercase tracking-wider text-[10px] mr-2">Основной ключ:</span>{r.pk ? <span className="text-amber-300 font-bold"><i className="fas fa-star mr-1 text-[9px]"></i>{r.pk}</span> : <span className="text-zinc-600">—</span>}</div>
                                                     <div>
@@ -1796,7 +1805,7 @@ function ensureSharing(sheetId, props) {
                                     </React.Fragment>
                                 ))}
                                 {sortedRows.length === 0 && (
-                                    <tr><td colSpan="9" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет кампаний</td></tr>
+                                    <tr><td colSpan="12" className="px-3 py-6 text-center text-zinc-500 text-sm">Нет кампаний</td></tr>
                                 )}
                             </tbody>
                         </table>
