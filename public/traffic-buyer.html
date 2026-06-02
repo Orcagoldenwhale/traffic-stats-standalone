@@ -87,6 +87,58 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
+        // --- Buyer department settings (proxy + own Telegram bot) — gear button + modal ---
+        const BuyerSettings = () => {
+            const [open, setOpen] = useState(false);
+            const [cfg, setCfg] = useState({ proxy: '', proxyEnvFallback: false, tgToken: '', tgChatId: '' });
+            const [msg, setMsg] = useState('');
+            const [busy, setBusy] = useState(false);
+            useEffect(() => { if (!open) return; (async () => { try { const r = await fetch('/api/traffic-buyer/settings'); if (r.ok) { setCfg(await r.json()); setMsg(''); } } catch (e) {} })(); }, [open]);
+            const post = async (path, body) => { try { const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { ok: r.ok, j: await r.json().catch(() => ({})) }; } catch (e) { return { ok: false, j: {} }; } };
+            const save = async () => { setBusy(true); setMsg('Сохраняю…'); const { ok } = await post('/api/traffic-buyer/settings', { proxy: cfg.proxy, tgToken: cfg.tgToken, tgChatId: cfg.tgChatId }); setMsg(ok ? 'Сохранено ✓' : 'Ошибка сохранения'); setBusy(false); };
+            const checkProxy = async () => { setBusy(true); setMsg('Проверяю прокси…'); const { j } = await post('/api/traffic-buyer/settings/check-proxy', { proxy: cfg.proxy }); setMsg(j.ok ? ('✓ Прокси работает, внешний IP: ' + j.ip) : ('✗ ' + (j.error || 'не работает'))); setBusy(false); };
+            const testTg = async () => { setBusy(true); setMsg('Отправляю тест…'); const { j } = await post('/api/traffic-buyer/settings/test-tg', { tgToken: cfg.tgToken, tgChatId: cfg.tgChatId }); setMsg(j.ok ? '✓ Сообщение отправлено — проверь Telegram' : '✗ Не отправилось (проверь токен и chat id)'); setBusy(false); };
+            return (
+                <>
+                    <button type="button" onClick={() => setOpen(true)} title="Настройки отдела: прокси для чтения Google и Telegram-бот" className="text-zinc-500 hover:text-violet-400 px-2 py-1.5 text-xs transition-colors">
+                        <i className="fas fa-cog"></i>
+                    </button>
+                    {open && (
+                        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-3" onClick={() => setOpen(false)}>
+                            <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider"><i className="fas fa-cog text-violet-400 mr-2"></i>Настройки отдела</h3>
+                                    <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-red-400"><i className="fas fa-times"></i></button>
+                                </div>
+                                <div className="mb-4">
+                                    <label className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+                                        Прокси для чтения Google
+                                        <i className="fas fa-circle-info text-zinc-600 cursor-help" title="Формат: host:port:user:pass (как у NodeMaven). Через этот прокси сервер читает Google-таблицы, чтобы Google не связывал запросы с основным аккаунтом. Пусто = используется прокси по умолчанию (из настроек сервера)."></i>
+                                    </label>
+                                    <input type="text" value={cfg.proxy} onChange={e => setCfg({ ...cfg, proxy: e.target.value })} placeholder={cfg.proxyEnvFallback ? 'по умолчанию (с сервера)' : 'host:port:user:pass'} className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono outline-none focus:border-violet-500" />
+                                    <button onClick={checkProxy} disabled={busy} className="mt-1.5 px-3 py-1 text-[11px] bg-zinc-700 hover:bg-zinc-600 rounded text-zinc-200 disabled:opacity-50"><i className="fas fa-plug mr-1"></i> Проверить прокси</button>
+                                </div>
+                                <div className="mb-4">
+                                    <label className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+                                        Telegram-бот отдела
+                                        <i className="fas fa-circle-info text-zinc-600 cursor-help" title="Токен бота получают у @BotFather (вид 123456:ABC...). Chat ID — числовой id чата (узнать у @getidsbot). Если заданы оба — алерты этого отдела идут в его бот. Пусто = только колокольчик в интерфейсе."></i>
+                                    </label>
+                                    <input type="text" value={cfg.tgToken} onChange={e => setCfg({ ...cfg, tgToken: e.target.value })} placeholder="токен бота (@BotFather)" className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono outline-none focus:border-violet-500 mb-1.5" />
+                                    <input type="text" value={cfg.tgChatId} onChange={e => setCfg({ ...cfg, tgChatId: e.target.value })} placeholder="chat id" className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono outline-none focus:border-violet-500" />
+                                    <button onClick={testTg} disabled={busy} className="mt-1.5 px-3 py-1 text-[11px] bg-zinc-700 hover:bg-zinc-600 rounded text-zinc-200 disabled:opacity-50"><i className="fas fa-paper-plane mr-1"></i> Проверить бота</button>
+                                </div>
+                                {msg && <div className="text-[11px] text-violet-300 mb-3">{msg}</div>}
+                                <div className="flex justify-end gap-2">
+                                    <button onClick={() => setOpen(false)} className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white">Закрыть</button>
+                                    <button onClick={save} disabled={busy} className="px-4 py-1.5 text-xs bg-violet-600 hover:bg-violet-500 text-white rounded font-bold disabled:opacity-50">Сохранить</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </>
+            );
+        };
+
         // --- Session-expiry guard ---
         // If a request comes back 401 (dead session after a server restart or 12h TTL), do NOT swallow it:
         // surface a blocking overlay so edits are never lost silently. Unsaved text stays in the fields.
@@ -2280,6 +2332,7 @@ function ensureSharing(sheetId, props) {
                                 <i className="fas fa-plus mix-blend-overlay"></i>
                                 ДОБАВИТЬ КАМПАНИЮ
                             </button>
+                            <BuyerSettings />
                             <button
                                 onClick={handleLogout}
                                 className="text-zinc-500 hover:text-red-400 px-2 py-1.5 text-xs transition-colors flex items-center gap-1.5"

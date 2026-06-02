@@ -3012,18 +3012,81 @@ setInterval(() => {
 }, 60000);
 
 // Sequential refresh: stats first, then admin — avoids overloading Google API
+// --- Traffic Buyer department settings (proxy + own Telegram bot), editable from the UI ---
+const TRAFFIC_BUYER_SETTINGS_FILE = join(__dirname, 'saved_sessions', '_traffic_buyer_settings.json');
+let buyerSettings = { proxy: '', tgToken: '', tgChatId: '' };
+async function loadBuyerSettings() {
+    try { if (existsSync(TRAFFIC_BUYER_SETTINGS_FILE)) buyerSettings = { ...buyerSettings, ...JSON.parse(await readFile(TRAFFIC_BUYER_SETTINGS_FILE, 'utf-8')) }; }
+    catch (e) { console.error('[Buyer] settings load failed:', e.message); }
+}
+async function saveBuyerSettings() {
+    const tmp = TRAFFIC_BUYER_SETTINGS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+    await writeFile(tmp, JSON.stringify(buyerSettings, null, 2), 'utf-8');
+    await rename(tmp, TRAFFIC_BUYER_SETTINGS_FILE);
+}
+await loadBuyerSettings();
+// Proxy used by the buyer worker: UI setting overrides env BUYER_PROXY (live, no restart). Format host:port:user:pass.
+function buyerProxy() {
+    const raw = ((buyerSettings.proxy || '').trim()) || BUYER_PROXY || '';
+    const p = raw.split(':');
+    return { hostPort: p.length >= 2 ? p[0] + ':' + p[1] : '', auth: p.length >= 4 ? p[2] + ':' + p.slice(3).join(':') : '' };
+}
+// Test a proxy string by fetching the egress IP through it. Returns {ok, ip}.
+function checkBuyerProxy(raw) {
+    return new Promise((resolve) => {
+        const p = (raw || '').split(':'); const hp = p.length >= 2 ? p[0] + ':' + p[1] : ''; const au = p.length >= 4 ? p[2] + ':' + p.slice(3).join(':') : '';
+        if (!hp) return resolve({ ok: false, error: 'Неверный формат (нужно host:port:user:pass)' });
+        const args = ['-s', '--max-time', '25', '-x', hp]; if (au) args.push('-U', au); args.push('https://api.ipify.org');
+        execFile('curl', args, { maxBuffer: 1024 * 1024 }, (err, out) => {
+            if (err) return resolve({ ok: false, error: 'Прокси недоступен / таймаут' });
+            const ip = (out || '').trim();
+            resolve({ ok: /^\d{1,3}(\.\d{1,3}){3}$/.test(ip), ip });
+        });
+    });
+}
+// Dept Telegram (independent of the global bot). Sends only if a token+chat are configured.
+async function sendBuyerTelegram(text, tokenOverride, chatOverride) {
+    const tok = ((tokenOverride != null ? tokenOverride : buyerSettings.tgToken) || '').trim();
+    const chat = ((chatOverride != null ? chatOverride : buyerSettings.tgChatId) || '').trim();
+    if (!tok || !chat) return false;
+    try { const r = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chat, text, parse_mode: 'HTML' }) }); return r.ok; }
+    catch (e) { return false; }
+}
+app.get('/api/traffic-buyer/settings', (req, res) => {
+    res.json({ proxy: buyerSettings.proxy || '', proxyEnvFallback: !!BUYER_PROXY, tgToken: buyerSettings.tgToken || '', tgChatId: buyerSettings.tgChatId || '' });
+});
+app.post('/api/traffic-buyer/settings', async (req, res) => {
+    const b = req.body || {};
+    for (const k of ['proxy', 'tgToken', 'tgChatId']) {
+        if (b[k] === undefined) continue;
+        if (typeof b[k] !== 'string' || b[k].length > 500) return res.status(400).json({ error: k + ' invalid' });
+        buyerSettings[k] = b[k].trim();
+    }
+    try { await saveBuyerSettings(); } catch (e) { return res.status(500).json({ error: e.message }); }
+    auditLog('SETTINGS', 'traffic-buyer', `proxy=${buyerSettings.proxy ? 'custom' : 'env'} tg=${buyerSettings.tgToken && buyerSettings.tgChatId ? 'on' : 'off'}`, req);
+    res.json({ ok: true });
+});
+app.post('/api/traffic-buyer/settings/check-proxy', async (req, res) => {
+    const raw = (req.body && typeof req.body.proxy === 'string' && req.body.proxy.trim()) || buyerSettings.proxy || BUYER_PROXY || '';
+    res.json(await checkBuyerProxy(raw));
+});
+app.post('/api/traffic-buyer/settings/test-tg', async (req, res) => {
+    const b = req.body || {};
+    const ok = await sendBuyerTelegram('✅ Traffic Buyer: тестовое сообщение — бот подключён.', b.tgToken, b.tgChatId);
+    res.json({ ok });
+});
+
 // --- Traffic Buyer worker (clone of stats worker; Google Sheets read via NodeMaven proxy; bell-only, no Telegram) ---
 let _buyerRefreshLock = false;
-const _buyerProxyParts = BUYER_PROXY ? BUYER_PROXY.split(':') : [];
-const _buyerProxyHostPort = _buyerProxyParts.length >= 2 ? _buyerProxyParts[0] + ':' + _buyerProxyParts[1] : '';
-const _buyerProxyAuth = _buyerProxyParts.length >= 4 ? _buyerProxyParts[2] + ':' + _buyerProxyParts.slice(3).join(':') : '';
 // fetch-compatible wrapper ({ ok, status, text() }) that routes a GET through the proxy via system curl.
+// Proxy is read live via buyerProxy() (UI settings override env), so changing it needs no restart.
 function fetchBuyerSheet(url, timeoutMs = 15000, retries = 1) {
     return new Promise((resolve) => {
-        if (!_buyerProxyHostPort) return resolve({ ok: false, status: 0, text: async () => '' });
+        const { hostPort: _hp, auth: _au } = buyerProxy();
+        if (!_hp) return resolve({ ok: false, status: 0, text: async () => '' });
         const run = (left) => {
-            const args = ['-sL', '--max-time', String(Math.max(5, Math.ceil(timeoutMs / 1000))), '-x', _buyerProxyHostPort];
-            if (_buyerProxyAuth) args.push('-U', _buyerProxyAuth);
+            const args = ['-sL', '--max-time', String(Math.max(5, Math.ceil(timeoutMs / 1000))), '-x', _hp];
+            if (_au) args.push('-U', _au);
             args.push('-w', '\\n%{http_code}', url);
             execFile('curl', args, { maxBuffer: 25 * 1024 * 1024 }, (err, stdout) => {
                 if (err) {
@@ -3383,7 +3446,15 @@ async function refreshBuyerData(options = {}) {
         await rename(tmpFile, TRAFFIC_BUYER_DATA_FILE);
         timestamps.traffic_buyer_data = Date.now();
         console.log(`[Worker-Buyer] Traffic Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached. ${activeAlerts.length} active alerts.`);
-        // Buyer: bell-only — Telegram alert-sending intentionally skipped.
+        // Buyer dept Telegram: forward active alerts to the dept's OWN bot if connected (else bell-only).
+        if (!onlyCampaignName && (buyerSettings.tgToken || '').trim() && (buyerSettings.tgChatId || '').trim()) {
+            for (const al of activeAlerts) {
+                const msg = al.type === 'cost'
+                    ? `🔔 <b>Buyer — превышение расхода</b>\n🏷 <b>${al.customName}</b> → ${al.campaign}\n💰 $${(al.cost || 0).toFixed(2)} (лимит $${(al.threshold || 0).toFixed(2)})` + (al.note ? `\n📝 ${al.note}` : '')
+                    : `🔔 <b>Buyer — алерт по ключу</b>\n🏷 <b>${al.customName || ''}</b>` + (al.note ? `\n📝 ${al.note}` : '');
+                await sendBuyerTelegram(msg).catch(() => {});
+            }
+        }
     } catch (e) {
         console.error('[Worker-Buyer] Fatal error refreshing Traffic Data:', e);
     } finally {
