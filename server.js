@@ -361,10 +361,15 @@ app.use((req, res, next) => {
         return res.redirect('/login.html');
     }
     req.session = session;
-    // Buyer role is sandboxed to its own dashboard. Additive — only affects role 'buyer' (which can't exist until BUYER_* env is set); user/admin logic untouched.
+    // Buyer role is fully sandboxed (deny-by-default): reaches ONLY its own dashboard + the few shared infra
+    // endpoints it actually uses. Everything else (Stats/Admin data, Keitaro, backups, sessions, assets, …) is
+    // blocked. Additive — only affects role 'buyer'; user/admin logic untouched.
     if (session.role === 'buyer') {
-        const buyerOwn = req.path === '/traffic-buyer.html' || req.path.startsWith('/api/traffic-buyer');
-        if (!buyerOwn && (req.path === '/' || req.path === '/traffic.html' || req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic') || req.path.startsWith('/api/keitaro'))) {
+        const buyerAllowed = req.path === '/traffic-buyer.html'
+            || req.path.startsWith('/api/traffic-buyer')
+            || req.path === '/api/status' || req.path === '/api/me' || req.path === '/api/logout'
+            || req.path === '/api/chessboard';
+        if (!buyerAllowed) {
             if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
             return res.redirect('/traffic-buyer.html');
         }
