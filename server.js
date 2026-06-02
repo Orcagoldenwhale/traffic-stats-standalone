@@ -3053,7 +3053,8 @@ async function sendBuyerTelegram(text, tokenOverride, chatOverride) {
     catch (e) { return false; }
 }
 app.get('/api/traffic-buyer/settings', (req, res) => {
-    res.json({ proxy: buyerSettings.proxy || '', proxyEnvFallback: !!BUYER_PROXY, tgToken: buyerSettings.tgToken || '', tgChatId: buyerSettings.tgChatId || '' });
+    // Show the EFFECTIVE proxy (UI override, else the server's configured one) so it's visible/editable.
+    res.json({ proxy: (buyerSettings.proxy || BUYER_PROXY || ''), tgToken: buyerSettings.tgToken || '', tgChatId: buyerSettings.tgChatId || '' });
 });
 app.post('/api/traffic-buyer/settings', async (req, res) => {
     const b = req.body || {};
@@ -3148,6 +3149,19 @@ async function refreshBuyerData(options = {}) {
         }
 
         const rates = await getExchangeRates();
+
+        // PROXY-ONLY GATE: Buyer reads Google ONLY through the proxy. If the proxy is missing or not
+        // responding — skip reading entirely (keep previous data) and surface an error. Never read direct.
+        let buyerProxyErr = null;
+        if (targetConfigs.some(c => c.customStatus !== 'ban')) {
+            if (!buyerProxy().hostPort) {
+                buyerProxyErr = 'Прокси не настроен — чтение работает только через прокси';
+            } else {
+                const _chk = await checkBuyerProxy(((buyerSettings.proxy || '').trim()) || BUYER_PROXY || '');
+                if (!_chk.ok) buyerProxyErr = 'Прокси недоступен — данные не обновлены' + (_chk.error ? ' (' + _chk.error + ')' : '');
+            }
+            if (buyerProxyErr) { console.error('[Worker-Buyer] ' + buyerProxyErr); targetConfigs = []; }
+        }
 
         for (const config of targetConfigs) {
             if (config.customStatus === 'ban') {
@@ -3442,7 +3456,7 @@ async function refreshBuyerData(options = {}) {
         // Atomic write to cache file
         const tmpId = Date.now() + Math.random().toString(36).slice(2);
         const tmpFile = TRAFFIC_BUYER_DATA_FILE + '.' + tmpId + '.tmp';
-        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap, activeAlerts }), 'utf-8');
+        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap, activeAlerts, proxyError: buyerProxyErr }), 'utf-8');
         await rename(tmpFile, TRAFFIC_BUYER_DATA_FILE);
         timestamps.traffic_buyer_data = Date.now();
         console.log(`[Worker-Buyer] Traffic Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached. ${activeAlerts.length} active alerts.`);

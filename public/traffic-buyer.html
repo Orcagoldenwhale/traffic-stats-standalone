@@ -115,7 +115,8 @@
                                         Прокси для чтения Google
                                         <i className="fas fa-circle-info text-zinc-600 cursor-help" title="Формат: host:port:user:pass (как у NodeMaven). Через этот прокси сервер читает Google-таблицы, чтобы Google не связывал запросы с основным аккаунтом. Пусто = используется прокси по умолчанию (из настроек сервера)."></i>
                                     </label>
-                                    <input type="text" value={cfg.proxy} onChange={e => setCfg({ ...cfg, proxy: e.target.value })} placeholder={cfg.proxyEnvFallback ? 'по умолчанию (с сервера)' : 'host:port:user:pass'} className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono outline-none focus:border-violet-500" />
+                                    <input type="text" value={cfg.proxy} onChange={e => setCfg({ ...cfg, proxy: e.target.value })} placeholder="host:port:user:pass" className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 font-mono outline-none focus:border-violet-500" />
+                                    <div className="text-[10px] text-amber-400/90 mt-1">⚠️ Чтение Google — только через прокси. Если прокси пустой или не работает — данные не читаются и появляется ошибка.</div>
                                     <button onClick={checkProxy} disabled={busy} className="mt-1.5 px-3 py-1 text-[11px] bg-zinc-700 hover:bg-zinc-600 rounded text-zinc-200 disabled:opacity-50"><i className="fas fa-plug mr-1"></i> Проверить прокси</button>
                                 </div>
                                 <div className="mb-4">
@@ -1590,6 +1591,7 @@ function ensureSharing(sheetId, props) {
             const [tasksOpen, setTasksOpen] = useState(false);
             const [alertsOpen, setAlertsOpen] = useState(false);
             const [activeAlerts, setActiveAlerts] = useState([]);
+            const [proxyError, setProxyError] = useState(null);
             const goToCampaign = (customName) => {
                 setTasksOpen(false);
                 setSearchFilter('');
@@ -1844,6 +1846,7 @@ function ensureSharing(sheetId, props) {
                                 if (snapshotMode) setSnapshotAt(json.snapshotAt || null);
                                 if (!snapshotMode) {
                                     setActiveAlerts(Array.isArray(json.activeAlerts) ? json.activeAlerts : []);
+                                    setProxyError(json.proxyError || null);
                                 }
                             }
                         }
@@ -2342,6 +2345,13 @@ function ensureSharing(sheetId, props) {
                             </button>
                         </div>
                     </header>
+
+                    {proxyError && (
+                        <div className="bg-red-900/40 border-b border-red-700 text-red-200 text-xs px-6 py-2 flex items-center gap-2 flex-shrink-0">
+                            <i className="fas fa-triangle-exclamation"></i>
+                            <span><b>Прокси:</b> {proxyError}. Чтение Google идёт только через прокси — данные не обновляются. Открой ⚙️ Настройки и проверь/замени прокси.</span>
+                        </div>
+                    )}
 
                     {/* Main Table Area */}
                     <main className="flex-1 overflow-hidden flex flex-col bg-[#0c0c0e]">
