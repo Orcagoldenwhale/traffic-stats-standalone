@@ -134,6 +134,7 @@ async function sendTelegramAlert(message) {
 function findCostAlerts(configs, allCampaignsMap, source) {
     const out = [];
     for (const config of configs) {
+        if ((config.customStatus || '').toLowerCase() === 'ban') continue; // забаненные кампании не алертят
         const threshold = parseFloat(config.costAlert);
         if (!threshold || threshold <= 0) continue;
         for (const [key, camp] of Object.entries(allCampaignsMap)) {
@@ -182,6 +183,7 @@ function _normalizeKw(s) {
 function findKeywordAlerts(configs, allCampaignsMap, source) {
     const out = [];
     for (const config of configs) {
+        if ((config.customStatus || '').toLowerCase() === 'ban') continue; // забаненные кампании не алертят
         const primary = _normalizeKw(config.primaryKeyword);
         if (!primary) continue;
         const offending = []; // { campaign, kwText, cost, adGroup }
