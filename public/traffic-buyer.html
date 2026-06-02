@@ -1298,262 +1298,242 @@ function getOrCreateSpreadsheet(accountName, accountId) {
 `;
 
         const GOOGLE_ADS_SCRIPT_NEW = `function main() {
-  var account = AdsApp.currentAccount();
-  var accountId = account.getCustomerId();
-  var accountName = account.getName();
-  var currency = account.getCurrencyCode();
+  var acct = AdsApp.currentAccount();
+  var meta = { code: acct.getCustomerId(), label: acct.getName(), money: acct.getCurrencyCode() };
 
-  Logger.log('=== НАЧАЛО СКРИПТА (NEW) ===');
-  Logger.log('Валюта кабинета: ' + currency);
-  Logger.log('ID кабинета: ' + accountId);
-  Logger.log('Название: ' + accountName);
+  trace('start', meta.label + ' #' + meta.code + ' [' + meta.money + ']');
 
-  var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
+  var book = openBook(meta.label, meta.code);
 
-  Logger.log('--- Сбор ключевых слов ---');
-  exportActiveKeywords(spreadsheet);
-  Logger.log('--- Сбор текстов объявлений ---');
-  exportAdTextsAndStats(spreadsheet);
-  Logger.log('--- Сбор данных для стороннего сервиса ---');
-  runThirdPartyService(spreadsheet, accountId, accountName, currency);
-  Logger.log('--- Сбор статистики кампаний ---');
-  exportCampaignStats(spreadsheet);
-  Logger.log('--- Сбор поисковых запросов ---');
-  exportSearchTermsToday(spreadsheet);
+  // каждый блок самодостаточен — порядок листов роли не играет
+  writeCampaignTotals(book);
+  writeTodayTerms(book);
+  writeLiveKeywords(book);
+  writeAdCopies(book);
+  writeFeed(book, meta);
 
-  var sheets = spreadsheet.getSheets();
-  for (var j = 0; j < sheets.length; j++) {
-    var name = sheets[j].getName();
-    if ((name === 'Sheet1' || name === 'Лист1') && sheets.length > 2) {
-      try { spreadsheet.deleteSheet(sheets[j]); } catch(e) {}
-      break;
-    }
-  }
-
-  Logger.log('Единая таблица готова: ' + spreadsheet.getUrl());
-  Logger.log('=== ЗАВЕРШЕНИЕ СКРИПТА (NEW) ===');
+  pruneBlankTab(book);
+  trace('finish', book.getUrl());
 }
 
-function exportActiveKeywords(spreadsheet) {
-  var sheet = getOrCreateSheet(spreadsheet, 'Рабочие_Ключи');
-  sheet.clear();
-  sheet.appendRow(['Ключевое слово', 'Статус', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+// ─────────── мелкие утилиты ───────────
+function trace(tag, msg) { Logger.log('[' + tag + '] ' + msg); }
 
-  var keywords = AdsApp.keywords().withCondition("CampaignStatus = ENABLED").get();
-  while (keywords.hasNext()) {
-    var kw = keywords.next();
-    var stats = kw.getStatsFor("ALL_TIME");
+function each(it, fn) { while (it.hasNext()) { fn(it.next()); } }
+
+function leaf(book, title) {
+  var s = book.getSheetByName(title);
+  return s ? s : book.insertSheet(title);
+}
+
+function reset(book, title, head) {
+  var s = leaf(book, title);
+  s.clear();
+  s.appendRow(head);
+  return s;
+}
+
+// ─────────── статистика через GAQL ───────────
+function pour(sheet, gaql, periodLabel) {
+  each(AdsApp.search(gaql), function (r) {
+    sheet.appendRow([
+      r.campaign.name,
+      r.campaign.status,
+      periodLabel,
+      r.metrics.impressions,
+      r.metrics.clicks,
+      r.metrics.costMicros / 1000000
+    ]);
+  });
+}
+
+function writeCampaignTotals(book) {
+  var sheet = reset(book, 'Статистика_Кампаний', ['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+  var fields = 'campaign.status, campaign.name, metrics.clicks, metrics.impressions, metrics.cost_micros';
+  pour(sheet, 'SELECT ' + fields + ' FROM campaign WHERE segments.date DURING TODAY', 'Сегодня');
+  pour(sheet, 'SELECT ' + fields + ' FROM campaign', 'Все время');
+}
+
+function writeTodayTerms(book) {
+  var sheet = reset(book, 'Поисковые_запросы_Сегодня', ['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+  var gaql = 'SELECT search_term_view.search_term, ad_group.name, campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros FROM search_term_view WHERE segments.date DURING TODAY';
+  each(AdsApp.search(gaql), function (r) {
+    sheet.appendRow([
+      r.searchTermView.searchTerm,
+      r.campaign.name,
+      r.adGroup.name,
+      r.metrics.impressions,
+      r.metrics.clicks,
+      r.metrics.costMicros / 1000000
+    ]);
+  });
+}
+
+// ─────────── объекты аккаунта ───────────
+function writeLiveKeywords(book) {
+  var sheet = reset(book, 'Рабочие_Ключи', ['Ключевое слово', 'Статус', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+  each(AdsApp.keywords().withCondition('CampaignStatus = ENABLED').get(), function (kw) {
+    var st = kw.getStatsFor('ALL_TIME');
     sheet.appendRow([
       kw.getText(),
       kw.isEnabled() ? 'ENABLED' : 'PAUSED',
       kw.getCampaign().getName(),
       kw.getAdGroup().getName(),
-      stats.getImpressions(),
-      stats.getClicks(),
-      stats.getCost()
+      st.getImpressions(),
+      st.getClicks(),
+      st.getCost()
     ]);
+  });
+}
+
+function writeAdCopies(book) {
+  var sheet = reset(book, 'Тексты_Объявлений', ['Кампания', 'Группа объявлений', 'Тип', 'Заголовки', 'Описания', 'Показы', 'Клики', 'Затраты']);
+  each(AdsApp.ads().withCondition('Status = ENABLED').forDateRange('ALL_TIME').get(), function (ad) {
+    var st = ad.getStatsFor('ALL_TIME');
+    if (st.getImpressions() <= 0) { return; }
+    sheet.appendRow([
+      ad.getCampaign().getName(),
+      ad.getAdGroup().getName(),
+      kindOf(ad),
+      titleOf(ad),
+      bodyOf(ad),
+      st.getImpressions(),
+      st.getClicks(),
+      st.getCost()
+    ]);
+  });
+}
+
+// ─────────── фид для внешнего сервиса (Info + Ads) ───────────
+function writeFeed(book, meta) {
+  var stamp = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
+  var dToday = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+  var dYest = Utilities.formatDate(new Date(Date.now() - 86400000), 'UTC', 'yyyy-MM-dd');
+
+  var info = reset(book, 'Info', ['account_id', 'account_name', 'currency', 'updated_at', 'script_run_at']);
+  info.appendRow([meta.code, meta.label, meta.money, stamp, stamp]);
+
+  var feed = reset(book, 'Ads', ['campaign_name', 'ad_group_name', 'ad_headline', 'ad_type', 'ad_id', 'status', 'cost', 'currency', 'clicks', 'impressions', 'conversions', 'avg_cpc', 'date', 'period']);
+  var seen = {};
+  var spans = [['today', 'TODAY', dToday], ['yesterday', 'YESTERDAY', dYest], ['last_30_days', 'LAST_30_DAYS', dToday]];
+  for (var i = 0; i < spans.length; i++) {
+    feedSpan(feed, spans[i], seen, meta.money);
   }
 }
 
-function exportAdTextsAndStats(spreadsheet) {
-  var sheet = getOrCreateSheet(spreadsheet, 'Тексты_Объявлений');
-  sheet.clear();
-  sheet.appendRow(['Кампания', 'Группа объявлений', 'Тип', 'Заголовки', 'Описания', 'Показы', 'Клики', 'Затраты']);
-  var adIterator = AdsApp.ads().withCondition("Status = ENABLED").forDateRange("ALL_TIME").get();
-  while (adIterator.hasNext()) {
-    var ad = adIterator.next();
-    var stats = ad.getStatsFor("ALL_TIME");
-    if (stats.getImpressions() > 0) {
-      sheet.appendRow([
-        ad.getCampaign().getName(),
-        ad.getAdGroup().getName(),
-        getAdType(ad),
-        getAdHeadline(ad),
-        getAdDescription(ad),
-        stats.getImpressions(),
-        stats.getClicks(),
-        stats.getCost()
-      ]);
-    }
-  }
+function feedSpan(feed, span, seen, money) {
+  var label = span[0], api = span[1], day = span[2];
+  each(AdsApp.ads().forDateRange(api).get(), function (ad) {
+    var st = ad.getStatsFor(api);
+    var id = idOf(ad);
+    var key = day + '|' + label + '|' + ad.getCampaign().getName() + '|' + ad.getAdGroup().getName() + '|' + id;
+    if (seen[key]) { return; }
+    seen[key] = 1;
+    feed.appendRow([
+      ad.getCampaign().getName(),
+      ad.getAdGroup().getName(),
+      titleOf(ad),
+      kindOf(ad),
+      id,
+      ad.isEnabled() ? 'enabled' : 'paused',
+      st.getCost(),
+      money,
+      st.getClicks(),
+      st.getImpressions(),
+      st.getConversions(),
+      st.getAverageCpc(),
+      day,
+      label
+    ]);
+  });
 }
 
-function runThirdPartyService(spreadsheet, accountId, accountName, currency) {
-  var now = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
-  var today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
-  var yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), 'UTC', 'yyyy-MM-dd');
-  var infoSheet = getOrCreateSheet(spreadsheet, 'Info');
-  infoSheet.clear();
-  infoSheet.appendRow(['account_id', 'account_name', 'currency', 'updated_at', 'script_run_at']);
-  infoSheet.appendRow([accountId, accountName, currency, now, now]);
-  var adsSheet = getOrCreateSheet(spreadsheet, 'Ads');
-  adsSheet.clear();
-  adsSheet.appendRow(['campaign_name', 'ad_group_name', 'ad_headline', 'ad_type', 'ad_id', 'status', 'cost', 'currency', 'clicks', 'impressions', 'conversions', 'avg_cpc', 'date', 'period']);
-  var periods = [
-    { label: 'today', apiLabel: 'TODAY', date: today },
-    { label: 'yesterday', apiLabel: 'YESTERDAY', date: yesterday },
-    { label: 'last_30_days', apiLabel: 'LAST_30_DAYS', date: today }
-  ];
-  var existingData = new Set();
-  for (var i = 0; i < periods.length; i++) {
-    addDataForPeriod(periods[i], adsSheet, existingData, currency);
-  }
-}
-
-function addDataForPeriod(periodConfig, adsSheet, existingData, currency) {
-  var adIterator = AdsApp.ads().forDateRange(periodConfig.apiLabel).get();
-  while (adIterator.hasNext()) {
-    var ad = adIterator.next();
-    var stats = ad.getStatsFor(periodConfig.apiLabel);
-    var adId = getAdId(ad);
-    var key = periodConfig.date + '|' + periodConfig.label + '|' + ad.getCampaign().getName() + '|' + ad.getAdGroup().getName() + '|' + adId;
-    if (!existingData.has(key)) {
-      adsSheet.appendRow([
-        ad.getCampaign().getName(),
-        ad.getAdGroup().getName(),
-        getAdHeadline(ad),
-        getAdType(ad),
-        adId,
-        ad.isEnabled() ? 'enabled' : 'paused',
-        stats.getCost(),
-        currency,
-        stats.getClicks(),
-        stats.getImpressions(),
-        stats.getConversions(),
-        stats.getAverageCpc(),
-        periodConfig.date,
-        periodConfig.label
-      ]);
-      existingData.add(key);
-    }
-  }
-}
-
-function getAdId(ad) {
+// ─────────── разбор объявления ───────────
+function idOf(ad) {
   try { return ad.getId().toString().split('/').pop(); } catch (e) { return ''; }
 }
 
-function getAdType(ad) {
-  if (ad.isType().responsiveSearchAd()) return 'RSA';
-  if (ad.isType().expandedTextAd()) return 'ETA';
+function kindOf(ad) {
+  if (ad.isType().responsiveSearchAd()) { return 'RSA'; }
+  if (ad.isType().expandedTextAd()) { return 'ETA'; }
   return 'OTHER';
 }
 
-function getAdHeadline(ad) {
+function titleOf(ad) {
   if (ad.isType().responsiveSearchAd()) {
-    var hl = ad.asType().responsiveSearchAd().getHeadlines();
-    return (hl && hl.length > 0) ? hl.map(function(h) { return h.text; }).join(' | ') : '';
+    var h = ad.asType().responsiveSearchAd().getHeadlines();
+    return (h && h.length) ? h.map(function (x) { return x.text; }).join(' | ') : '';
   }
   try { return ad.getHeadline() || ''; } catch (e) { return ''; }
 }
 
-function getAdDescription(ad) {
+function bodyOf(ad) {
   if (ad.isType().responsiveSearchAd()) {
-    var ds = ad.asType().responsiveSearchAd().getDescriptions();
-    return (ds && ds.length > 0) ? ds.map(function(d) { return d.text; }).join(' | ') : '';
+    var d = ad.asType().responsiveSearchAd().getDescriptions();
+    return (d && d.length) ? d.map(function (x) { return x.text; }).join(' | ') : '';
   }
   try { return ad.getDescription1() || ''; } catch (e) { return ''; }
 }
 
-function exportCampaignStats(spreadsheet) {
-  var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
-  sheet.clear();
-  sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
-
-  var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign WHERE segments.date DURING TODAY";
-  var rowsToday = AdsApp.search(queryToday);
-  while (rowsToday.hasNext()) {
-    var row = rowsToday.next();
-    sheet.appendRow([row.campaign.name, row.campaign.status, 'Сегодня', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
-  }
-
-  var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign";
-  var rowsTotal = AdsApp.search(queryTotal);
-  while (rowsTotal.hasNext()) {
-    var row = rowsTotal.next();
-    sheet.appendRow([row.campaign.name, row.campaign.status, 'Все время', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
-  }
-}
-
-function exportSearchTermsToday(spreadsheet) {
-  var sheet = getOrCreateSheet(spreadsheet, 'Поисковые_запросы_Сегодня');
-  sheet.clear();
-  sheet.appendRow(['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
-  var query = "SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros FROM search_term_view WHERE segments.date DURING TODAY";
-  var rows = AdsApp.search(query);
-  while (rows.hasNext()) {
-    var row = rows.next();
-    sheet.appendRow([row.searchTermView.searchTerm, row.campaign.name, row.adGroup.name, row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
-  }
-}
-
-function getOrCreateSheet(spreadsheet, sheetName) {
-  var sheet = spreadsheet.getSheetByName(sheetName);
-  if (!sheet) { sheet = spreadsheet.insertSheet(sheetName); }
-  return sheet;
-}
-
-function getOrCreateSpreadsheet(accountName, accountId) {
-  var props = PropertiesService.getScriptProperties();
-  var sheetId = props.getProperty('SHEET_ID');
-
-  if (sheetId) {
-    var existing = tryOpenSpreadsheet(sheetId, props);
-    if (existing) {
-      ensureSharing(sheetId, props);
-      return existing;
+// ─────────── удалить дефолтный пустой лист ───────────
+function pruneBlankTab(book) {
+  var all = book.getSheets();
+  if (all.length <= 2) { return; }
+  for (var i = 0; i < all.length; i++) {
+    var nm = all[i].getName();
+    if (nm === 'Sheet1' || nm === 'Лист1') {
+      try { book.deleteSheet(all[i]); } catch (e) {}
+      return;
     }
   }
-
-  Logger.log('Создаём новую таблицу для ' + accountName + ' (' + accountId + ')');
-  var spreadsheet = SpreadsheetApp.create('Google Ads Data - ' + accountName + ' (' + accountId + ')');
-  var newSheetId = spreadsheet.getId();
-  props.setProperty('SHEET_ID', newSheetId);
-  props.deleteProperty('SHARING_DONE');
-  ensureSharing(newSheetId, props);
-  return spreadsheet;
 }
 
-function tryOpenSpreadsheet(sheetId, props) {
-  var maxAttempts = 3;
-  var lastError = null;
+// ─────────── книга: открыть/создать + расшарить по ссылке ───────────
+function openBook(label, code) {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty('SHEET_ID');
+  if (stored) {
+    var existing = reopen(stored, props);
+    if (existing) { share(stored, props); return existing; }
+  }
+  trace('new-book', label + ' (' + code + ')');
+  var book = SpreadsheetApp.create('Google Ads Data - ' + label + ' (' + code + ')');
+  var freshId = book.getId();
+  props.setProperty('SHEET_ID', freshId);
+  props.deleteProperty('SHARING_DONE');
+  share(freshId, props);
+  return book;
+}
 
-  for (var i = 0; i < maxAttempts; i++) {
+function reopen(id, props) {
+  var attempts = 3, last = null;
+  for (var i = 0; i < attempts; i++) {
     try {
-      return SpreadsheetApp.openById(sheetId);
+      return SpreadsheetApp.openById(id);
     } catch (e) {
-      lastError = e;
-      var msg = (e.message || '').toLowerCase();
-
-      if (msg.indexOf('not found') !== -1 ||
-          msg.indexOf('invalid') !== -1 ||
-          msg.indexOf('does not exist') !== -1 ||
-          msg.indexOf('unable to find') !== -1) {
-        Logger.log('Таблица ' + sheetId + ' реально удалена: ' + e.message);
+      last = e;
+      var m = (e.message || '').toLowerCase();
+      if (m.indexOf('not found') !== -1 || m.indexOf('invalid') !== -1 || m.indexOf('does not exist') !== -1 || m.indexOf('unable to find') !== -1) {
+        trace('book-gone', id + ' :: ' + e.message);
         props.deleteProperty('SHEET_ID');
         props.deleteProperty('SHARING_DONE');
         return null;
       }
-
-      Logger.log('Попытка ' + (i + 1) + '/' + maxAttempts + ' открыть таблицу упала (временная ошибка): ' + e.message);
-      if (i < maxAttempts - 1) {
-        Utilities.sleep(2000 * (i + 1));
-      }
+      trace('reopen-retry', (i + 1) + '/' + attempts + ' :: ' + e.message);
+      if (i < attempts - 1) { Utilities.sleep(2000 * (i + 1)); }
     }
   }
-
-  Logger.log('Все ' + maxAttempts + ' попыток открыть таблицу упали. SHEET_ID сохранён, пропускаем запуск. Последняя ошибка: ' + lastError.message);
-  throw new Error('Временная ошибка Google API при открытии таблицы. SHEET_ID сохранён, следующий запуск повторит попытку.');
+  throw new Error('Temporary Google API error while opening the workbook; SHEET_ID preserved, next run will retry.');
 }
 
-function ensureSharing(sheetId, props) {
-  if (props.getProperty('SHARING_DONE') === 'true') return;
+function share(id, props) {
+  if (props.getProperty('SHARING_DONE') === 'true') { return; }
   try {
-    DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    DriveApp.getFileById(id).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     props.setProperty('SHARING_DONE', 'true');
-    Logger.log('Sharing настроен для таблицы ' + sheetId);
+    trace('shared', id);
   } catch (e) {
-    Logger.log('Не удалось настроить sharing (не критично, повторим в следующий раз): ' + e.message);
+    trace('share-failed', e.message);
   }
 }`;
 
