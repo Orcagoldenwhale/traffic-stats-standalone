@@ -2079,16 +2079,21 @@ function ensureSharing(sheetId, props) {
                     {/* Header */}
                     <header className="min-h-[3.5rem] py-2 border-b border-zinc-800 flex flex-wrap items-center justify-between px-6 gap-y-3 bg-zinc-950 flex-shrink-0 z-30 w-full overflow-visible relative">
                         <div className="flex flex-wrap items-center gap-y-2">
-                            <i className="fas fa-chart-bar text-blue-500 mr-3"></i>
-                            <h1 className="text-xs sm:text-sm font-bold tracking-[0.2em] text-zinc-300 mr-2 sm:mr-3">TRAFFIC_STATS</h1>
+                            <i className="fas fa-user-tie text-violet-400 mr-3"></i>
+                            <h1 className="text-xs sm:text-sm font-bold tracking-[0.2em] text-zinc-300 mr-2 sm:mr-3">TRAFFIC_BUYER</h1>
                             <span className="text-[10px] text-zinc-600 font-mono mr-4 sm:mr-6 self-end mb-[1px]">v1.3</span>
                             {isSavingOrder && <span className="text-[10px] text-yellow-400 animate-pulse mr-3"><i className="fas fa-circle-notch fa-spin mr-1"></i>Сохранение...</span>}
 
                             {/* TAB SWITCHER */}
                             <div className="bg-zinc-800/50 p-1 rounded-lg flex items-center gap-1">
-                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
+                                <a href="/traffic-buyer.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
+                                    <i className="fas fa-user-tie mr-1.5"></i> Traffic Buyer
+                                </a>
+                                {role === 'admin' && (
+                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
                                     <i className="fas fa-chart-bar mr-1.5"></i> Traffic Stats
                                 </a>
+                                )}
                                 {role === 'admin' && (
                                 <a href="/traffic-admin.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
                                     <i className="fas fa-cogs mr-1.5"></i> Traffic Admin
