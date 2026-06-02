@@ -3170,15 +3170,20 @@ function fetchBuyerSheet(url, timeoutMs = 15000, retries = 1) {
 // Читает CSV листа байера, пробуя несколько имён вкладок по очереди (англ. → рус. фолбэк).
 // Возвращает текст первого пригодного ответа или null. Совместимо с аккаунтами,
 // где ещё крутится старый скрипт с русскими подписями листов.
-async function buyerSheetCsv(sheetId, names, timeoutMs, retries) {
+async function buyerSheetCsv(sheetId, names, validHeaders, timeoutMs, retries) {
+    // ВАЖНО: gviz при несуществующем sheet=Name отдаёт ПЕРВЫЙ лист книги (HTTP 200),
+    // а не ошибку. Поэтому проверяем шапку: принимаем CSV только если первая строка
+    // начинается с одной из ожидаемых (англ. ИЛИ рус.). Иначе пробуем следующее имя.
     for (let n = 0; n < names.length; n++) {
         const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(names[n])}`;
         let res;
         try { res = await fetchBuyerSheet(url, timeoutMs, retries); } catch (e) { continue; }
-        if (res && res.ok) {
-            const txt = await res.text();
-            if (txt && !txt.startsWith('<html')) return txt;
-        }
+        if (!res || !res.ok) continue;
+        const txt = await res.text();
+        if (!txt || txt.startsWith('<html')) continue;
+        const hdr = (parseCSV(txt)[0] || []).map(s => (s || '').trim());
+        const match = validHeaders.some(vh => vh.length <= hdr.length && vh.every((c, i) => c === hdr[i]));
+        if (match) return txt;
     }
     return null;
 }
@@ -3295,7 +3300,7 @@ async function refreshBuyerData(options = {}) {
                 } catch (e) { /* No Info sheet — assume USD */ }
 
                 // 1. Fetch Campaign Stats sheet (English tab, Russian fallback)
-                const statsText = await buyerSheetCsv(sheetId, ['Campaign_Stats', 'Статистика_Кампаний']);
+                const statsText = await buyerSheetCsv(sheetId, ['Campaign_Stats', 'Статистика_Кампаний'], [['Campaign', 'Status', 'Period'], ['Кампания', 'Статус', 'Период']]);
                 if (statsText) {
                     {
                         const statsData = parseCSV(statsText);
@@ -3329,7 +3334,7 @@ async function refreshBuyerData(options = {}) {
                 }
 
                 // 2. Fetch Search Terms sheet (English tab, Russian fallback)
-                const termsText = await buyerSheetCsv(sheetId, ['Search_Terms_Today', 'Поисковые_запросы_Сегодня']);
+                const termsText = await buyerSheetCsv(sheetId, ['Search_Terms_Today', 'Поисковые_запросы_Сегодня'], [['Search term', 'Campaign', 'Ad group'], ['Поисковый запрос', 'Кампания', 'Группа объявлений']]);
                 if (termsText) {
                     {
                         const termsData = parseCSV(termsText);
@@ -3361,7 +3366,7 @@ async function refreshBuyerData(options = {}) {
 
                 // 3. Fetch Keywords sheet (English tab, Russian fallback; optional)
                 try {
-                    const kwText = await buyerSheetCsv(sheetId, ['Active_Keywords', 'Рабочие_Ключи']);
+                    const kwText = await buyerSheetCsv(sheetId, ['Active_Keywords', 'Рабочие_Ключи'], [['Keyword', 'Status', 'Campaign'], ['Ключевое слово', 'Статус', 'Кампания']]);
                     if (kwText) {
                         {
                             const kwData = parseCSV(kwText);
@@ -3388,7 +3393,7 @@ async function refreshBuyerData(options = {}) {
 
                 // 4. Fetch Ad Texts sheet (English tab, Russian fallback; optional)
                 try {
-                    const adText = await buyerSheetCsv(sheetId, ['Ad_Copies', 'Тексты_Объявлений']);
+                    const adText = await buyerSheetCsv(sheetId, ['Ad_Copies', 'Тексты_Объявлений'], [['Campaign', 'Ad group', 'Type'], ['Кампания', 'Группа объявлений', 'Тип']]);
                     if (adText) {
                         {
                             const adData = parseCSV(adText);
