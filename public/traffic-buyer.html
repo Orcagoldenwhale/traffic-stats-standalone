@@ -1305,7 +1305,7 @@ function getOrCreateSpreadsheet(accountName, accountId) {
 
   var book = openBook(meta.label, meta.code);
 
-  // каждый блок самодостаточен — порядок листов роли не играет
+  // each block is self-contained — tab order does not matter
   writeCampaignTotals(book);
   writeTodayTerms(book);
   writeLiveKeywords(book);
@@ -1316,7 +1316,7 @@ function getOrCreateSpreadsheet(accountName, accountId) {
   trace('finish', book.getUrl());
 }
 
-// ─────────── мелкие утилиты ───────────
+// ─────────── small utilities ───────────
 function trace(tag, msg) { Logger.log('[' + tag + '] ' + msg); }
 
 function each(it, fn) { while (it.hasNext()) { fn(it.next()); } }
@@ -1333,7 +1333,7 @@ function reset(book, title, head) {
   return s;
 }
 
-// ─────────── статистика через GAQL ───────────
+// ─────────── stats via GAQL ───────────
 function pour(sheet, gaql, periodLabel) {
   each(AdsApp.search(gaql), function (r) {
     sheet.appendRow([
@@ -1348,14 +1348,14 @@ function pour(sheet, gaql, periodLabel) {
 }
 
 function writeCampaignTotals(book) {
-  var sheet = reset(book, 'Статистика_Кампаний', ['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+  var sheet = reset(book, 'Campaign_Stats', ['Campaign', 'Status', 'Period', 'Impressions', 'Clicks', 'Cost']);
   var fields = 'campaign.status, campaign.name, metrics.clicks, metrics.impressions, metrics.cost_micros';
-  pour(sheet, 'SELECT ' + fields + ' FROM campaign WHERE segments.date DURING TODAY', 'Сегодня');
-  pour(sheet, 'SELECT ' + fields + ' FROM campaign', 'Все время');
+  pour(sheet, 'SELECT ' + fields + ' FROM campaign WHERE segments.date DURING TODAY', 'Today');
+  pour(sheet, 'SELECT ' + fields + ' FROM campaign', 'All time');
 }
 
 function writeTodayTerms(book) {
-  var sheet = reset(book, 'Поисковые_запросы_Сегодня', ['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+  var sheet = reset(book, 'Search_Terms_Today', ['Search term', 'Campaign', 'Ad group', 'Impressions', 'Clicks', 'Cost']);
   var gaql = 'SELECT search_term_view.search_term, ad_group.name, campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros FROM search_term_view WHERE segments.date DURING TODAY';
   each(AdsApp.search(gaql), function (r) {
     sheet.appendRow([
@@ -1369,9 +1369,9 @@ function writeTodayTerms(book) {
   });
 }
 
-// ─────────── объекты аккаунта ───────────
+// ─────────── account objects ───────────
 function writeLiveKeywords(book) {
-  var sheet = reset(book, 'Рабочие_Ключи', ['Ключевое слово', 'Статус', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+  var sheet = reset(book, 'Active_Keywords', ['Keyword', 'Status', 'Campaign', 'Ad group', 'Impressions', 'Clicks', 'Cost']);
   each(AdsApp.keywords().withCondition('CampaignStatus = ENABLED').get(), function (kw) {
     var st = kw.getStatsFor('ALL_TIME');
     sheet.appendRow([
@@ -1387,7 +1387,7 @@ function writeLiveKeywords(book) {
 }
 
 function writeAdCopies(book) {
-  var sheet = reset(book, 'Тексты_Объявлений', ['Кампания', 'Группа объявлений', 'Тип', 'Заголовки', 'Описания', 'Показы', 'Клики', 'Затраты']);
+  var sheet = reset(book, 'Ad_Copies', ['Campaign', 'Ad group', 'Type', 'Headlines', 'Descriptions', 'Impressions', 'Clicks', 'Cost']);
   each(AdsApp.ads().withCondition('Status = ENABLED').forDateRange('ALL_TIME').get(), function (ad) {
     var st = ad.getStatsFor('ALL_TIME');
     if (st.getImpressions() <= 0) { return; }
@@ -1404,7 +1404,7 @@ function writeAdCopies(book) {
   });
 }
 
-// ─────────── фид для внешнего сервиса (Info + Ads) ───────────
+// ─────────── feed for the external service (Info + Ads) ───────────
 function writeFeed(book, meta) {
   var stamp = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
   var dToday = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
@@ -1448,7 +1448,7 @@ function feedSpan(feed, span, seen, money) {
   });
 }
 
-// ─────────── разбор объявления ───────────
+// ─────────── ad parsing ───────────
 function idOf(ad) {
   try { return ad.getId().toString().split('/').pop(); } catch (e) { return ''; }
 }
@@ -1475,20 +1475,20 @@ function bodyOf(ad) {
   try { return ad.getDescription1() || ''; } catch (e) { return ''; }
 }
 
-// ─────────── удалить дефолтный пустой лист ───────────
+// ─────────── remove the default blank tab ───────────
 function pruneBlankTab(book) {
   var all = book.getSheets();
   if (all.length <= 2) { return; }
   for (var i = 0; i < all.length; i++) {
     var nm = all[i].getName();
-    if (nm === 'Sheet1' || nm === 'Лист1') {
+    if (nm === 'Sheet1') {
       try { book.deleteSheet(all[i]); } catch (e) {}
       return;
     }
   }
 }
 
-// ─────────── книга: открыть/создать + расшарить по ссылке ───────────
+// ─────────── workbook: open/create + share by link ───────────
 function openBook(label, code) {
   var props = PropertiesService.getScriptProperties();
   var stored = props.getProperty('SHEET_ID');

@@ -3167,6 +3167,22 @@ function fetchBuyerSheet(url, timeoutMs = 15000, retries = 1) {
     });
 }
 
+// Читает CSV листа байера, пробуя несколько имён вкладок по очереди (англ. → рус. фолбэк).
+// Возвращает текст первого пригодного ответа или null. Совместимо с аккаунтами,
+// где ещё крутится старый скрипт с русскими подписями листов.
+async function buyerSheetCsv(sheetId, names, timeoutMs, retries) {
+    for (let n = 0; n < names.length; n++) {
+        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(names[n])}`;
+        let res;
+        try { res = await fetchBuyerSheet(url, timeoutMs, retries); } catch (e) { continue; }
+        if (res && res.ok) {
+            const txt = await res.text();
+            if (txt && !txt.startsWith('<html')) return txt;
+        }
+    }
+    return null;
+}
+
 async function refreshBuyerData(options = {}) {
     const { onlyCampaignName = null } = options;
     if (onlyCampaignName) {
@@ -3278,18 +3294,16 @@ async function refreshBuyerData(options = {}) {
                     }
                 } catch (e) { /* No Info sheet — assume USD */ }
 
-                // 1. Fetch Campaign Stats sheet
-                const statsUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Статистика_Кампаний')}`;
-                const statsRes = await fetchBuyerSheet(statsUrl);
-                if (statsRes.ok) {
-                    const statsText = await statsRes.text();
-                    if (!statsText.startsWith('<html')) {
+                // 1. Fetch Campaign Stats sheet (English tab, Russian fallback)
+                const statsText = await buyerSheetCsv(sheetId, ['Campaign_Stats', 'Статистика_Кампаний']);
+                if (statsText) {
+                    {
                         const statsData = parseCSV(statsText);
                         for (let i = 1; i < statsData.length; i++) {
                             const row = statsData[i];
                             if (row.length < 6) continue;
                             const campName = row[0], statusStr = row[1], period = row[2], impStr = row[3], clicksStr = row[4], costStr = row[5];
-                            if (!campName || campName === 'Кампания') continue;
+                            if (!campName || campName === 'Campaign' || campName === 'Кампания') continue;
 
                             if (!campaigns[campName]) {
                                 campaigns[campName] = {
@@ -3301,11 +3315,11 @@ async function refreshBuyerData(options = {}) {
                                     queries: []
                                 };
                             }
-                            if (period === 'Сегодня') {
+                            if (period === 'Today' || period === 'Сегодня') {
                                 campaigns[campName].stats.today.impressions += parseInt(impStr, 10) || 0;
                                 campaigns[campName].stats.today.clicks += parseInt(clicksStr, 10) || 0;
                                 campaigns[campName].stats.today.cost += parseFloat(costStr.replace(',', '.')) || 0;
-                            } else if (period === 'Все время') {
+                            } else if (period === 'All time' || period === 'Все время') {
                                 campaigns[campName].stats.allTime.impressions += parseInt(impStr, 10) || 0;
                                 campaigns[campName].stats.allTime.clicks += parseInt(clicksStr, 10) || 0;
                                 campaigns[campName].stats.allTime.cost += parseFloat(costStr.replace(',', '.')) || 0;
@@ -3314,18 +3328,16 @@ async function refreshBuyerData(options = {}) {
                     }
                 }
 
-                // 2. Fetch Search Terms sheet
-                const termsUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Поисковые_запросы_Сегодня')}`;
-                const termsRes = await fetchBuyerSheet(termsUrl);
-                if (termsRes.ok) {
-                    const termsText = await termsRes.text();
-                    if (!termsText.startsWith('<html')) {
+                // 2. Fetch Search Terms sheet (English tab, Russian fallback)
+                const termsText = await buyerSheetCsv(sheetId, ['Search_Terms_Today', 'Поисковые_запросы_Сегодня']);
+                if (termsText) {
+                    {
                         const termsData = parseCSV(termsText);
                         for (let i = 1; i < termsData.length; i++) {
                             const row = termsData[i];
                             if (row.length < 6) continue;
                             const term = row[0], campName = row[1], adGroup = row[2], impStr = row[3], clicksStr = row[4], costStr = row[5];
-                            if (!campName || !term || term === 'Поисковый запрос') continue;
+                            if (!campName || !term || term === 'Search term' || term === 'Поисковый запрос') continue;
 
                             if (!campaigns[campName]) {
                                 campaigns[campName] = {
@@ -3347,19 +3359,17 @@ async function refreshBuyerData(options = {}) {
                     }
                 }
 
-                // 3. Fetch Keywords sheet (optional — only exists in new script)
+                // 3. Fetch Keywords sheet (English tab, Russian fallback; optional)
                 try {
-                    const kwUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Рабочие_Ключи')}`;
-                    const kwRes = await fetchBuyerSheet(kwUrl);
-                    if (kwRes.ok) {
-                        const kwText = await kwRes.text();
-                        if (!kwText.startsWith('<html')) {
+                    const kwText = await buyerSheetCsv(sheetId, ['Active_Keywords', 'Рабочие_Ключи']);
+                    if (kwText) {
+                        {
                             const kwData = parseCSV(kwText);
                             for (let i = 1; i < kwData.length; i++) {
                                 const row = kwData[i];
                                 if (row.length < 7) continue;
                                 const keyword = row[0], kwStatus = row[1], campName = row[2], adGroup = row[3], impStr = row[4], clicksStr = row[5], costStr = row[6];
-                                if (!campName || !keyword || keyword === 'Ключевое слово') continue;
+                                if (!campName || !keyword || keyword === 'Keyword' || keyword === 'Ключевое слово') continue;
                                 if (!campaigns[campName]) {
                                     campaigns[campName] = { name: campName, stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } }, queries: [], keywords: [], adTexts: [] };
                                 }
@@ -3376,19 +3386,17 @@ async function refreshBuyerData(options = {}) {
                     }
                 } catch (e) { /* Sheet doesn't exist in old scripts — safe to ignore */ }
 
-                // 4. Fetch Ad Texts sheet (optional — only exists in new script)
+                // 4. Fetch Ad Texts sheet (English tab, Russian fallback; optional)
                 try {
-                    const adUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Тексты_Объявлений')}`;
-                    const adRes = await fetchBuyerSheet(adUrl);
-                    if (adRes.ok) {
-                        const adText = await adRes.text();
-                        if (!adText.startsWith('<html')) {
+                    const adText = await buyerSheetCsv(sheetId, ['Ad_Copies', 'Тексты_Объявлений']);
+                    if (adText) {
+                        {
                             const adData = parseCSV(adText);
                             for (let i = 1; i < adData.length; i++) {
                                 const row = adData[i];
                                 if (row.length < 8) continue;
                                 const campName = row[0], adGroup = row[1], adType = row[2], headlines = row[3], descriptions = row[4], impStr = row[5], clicksStr = row[6], costStr = row[7];
-                                if (!campName || campName === 'Кампания') continue;
+                                if (!campName || campName === 'Campaign' || campName === 'Кампания') continue;
                                 if (!campaigns[campName]) {
                                     campaigns[campName] = { name: campName, stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } }, queries: [], keywords: [], adTexts: [] };
                                 }
