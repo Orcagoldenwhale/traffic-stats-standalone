@@ -3089,6 +3089,22 @@ function checkBuyerProxy(raw) {
         });
     });
 }
+// Best-effort country lookup for an IP (cosmetic; used ONLY in the manual proxy check).
+// Failure returns '' and never affects the proxy read-gate (checkBuyerProxy stays untouched).
+function lookupIpCountry(ip) {
+    return new Promise((resolve) => {
+        if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip || '')) return resolve('');
+        const args = ['-s', '--max-time', '8', `http://ip-api.com/json/${ip}?fields=status,country,countryCode&lang=ru`];
+        execFile('curl', args, { maxBuffer: 256 * 1024 }, (err, out) => {
+            if (err) return resolve('');
+            try {
+                const j = JSON.parse(out || '{}');
+                if (j.status === 'success' && j.country) return resolve(j.countryCode ? `${j.country} (${j.countryCode})` : j.country);
+            } catch (e) { /* ignore */ }
+            resolve('');
+        });
+    });
+}
 // Dept Telegram (independent of the global bot). Sends only if a token+chat are configured.
 async function sendBuyerTelegram(text, tokenOverride, chatOverride) {
     const tok = ((tokenOverride != null ? tokenOverride : buyerSettings.tgToken) || '').trim();
@@ -3114,7 +3130,9 @@ app.post('/api/traffic-buyer/settings', async (req, res) => {
 });
 app.post('/api/traffic-buyer/settings/check-proxy', async (req, res) => {
     const raw = (req.body && typeof req.body.proxy === 'string' && req.body.proxy.trim()) || buyerSettings.proxy || BUYER_PROXY || '';
-    res.json(await checkBuyerProxy(raw));
+    const r = await checkBuyerProxy(raw);
+    if (r && r.ok && r.ip) r.country = await lookupIpCountry(r.ip);
+    res.json(r);
 });
 app.post('/api/traffic-buyer/settings/test-tg', async (req, res) => {
     const b = req.body || {};

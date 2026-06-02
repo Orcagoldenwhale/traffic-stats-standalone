@@ -96,7 +96,7 @@
             useEffect(() => { if (!open) return; (async () => { try { const r = await fetch('/api/traffic-buyer/settings'); if (r.ok) { setCfg(await r.json()); setMsg(''); } } catch (e) {} })(); }, [open]);
             const post = async (path, body) => { try { const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { ok: r.ok, j: await r.json().catch(() => ({})) }; } catch (e) { return { ok: false, j: {} }; } };
             const save = async () => { setBusy(true); setMsg('Сохраняю…'); const { ok } = await post('/api/traffic-buyer/settings', { proxy: cfg.proxy, tgToken: cfg.tgToken, tgChatId: cfg.tgChatId }); setMsg(ok ? 'Сохранено ✓' : 'Ошибка сохранения'); setBusy(false); };
-            const checkProxy = async () => { setBusy(true); setMsg('Проверяю прокси…'); const { j } = await post('/api/traffic-buyer/settings/check-proxy', { proxy: cfg.proxy }); setMsg(j.ok ? ('✓ Прокси работает, внешний IP: ' + j.ip) : ('✗ ' + (j.error || 'не работает'))); setBusy(false); };
+            const checkProxy = async () => { setBusy(true); setMsg('Проверяю прокси…'); const { j } = await post('/api/traffic-buyer/settings/check-proxy', { proxy: cfg.proxy }); setMsg(j.ok ? ('✓ Прокси работает, внешний IP: ' + j.ip + (j.country ? ' — ' + j.country : '')) : ('✗ ' + (j.error || 'не работает'))); setBusy(false); };
             const testTg = async () => { setBusy(true); setMsg('Отправляю тест…'); const { j } = await post('/api/traffic-buyer/settings/test-tg', { tgToken: cfg.tgToken, tgChatId: cfg.tgChatId }); setMsg(j.ok ? '✓ Сообщение отправлено — проверь Telegram' : '✗ Не отправилось (проверь токен и chat id)'); setBusy(false); };
             return (
                 <>
