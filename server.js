@@ -2177,6 +2177,17 @@ async function buildTodayAnalytics(options = {}) {
         }
     }
 
+    // Расход по всем кампаниям в ПРОГРЕВЕ (отдельной суммой, без детализации) — Stats + Admin.
+    let warmupCost = 0, warmupCount = 0;
+    for (const blob of sources) {
+        for (const v of Object.values(blob)) {
+            if ((v.customStatus || '').toLowerCase() !== 'warmup') continue;
+            const c = parseFloat(((v.stats || {}).today || {}).cost) || 0;
+            warmupCost += c;
+            if (c > 0) warmupCount++;
+        }
+    }
+
     const byGeo = new Map();
     for (const v of live) {
         const geo = _extractGeo(v.customName || v.name || '');
@@ -2238,7 +2249,9 @@ async function buildTodayAnalytics(options = {}) {
     lines.push(`  Всего кампаний крутилось сегодня: ${live.length}`);
     lines.push(`  Общие показы:  ${_fmtInt(totalImpr)}`);
     lines.push(`  Общие клики:   ${_fmtInt(totalClicks)}`);
-    lines.push(`  Общий спенд:   $${_fmtMoney(totalCost)}`);
+    lines.push(`  Спенд (боевые):  $${_fmtMoney(totalCost)}`);
+    lines.push(`  Спенд (прогрев, ${warmupCount} камп.): $${_fmtMoney(warmupCost)}`);
+    lines.push(`  ИТОГО ЗА ДЕНЬ (боевые + прогрев): $${_fmtMoney(totalCost + warmupCost)}`);
     lines.push(`  Всего поисковых запросов (уникальных): ${queryAgg.size}`);
     lines.push('');
 
