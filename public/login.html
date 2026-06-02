@@ -49,7 +49,11 @@
                         pass: document.getElementById('pass').value
                     })
                 });
-                if (r.ok) { window.location.href = '/traffic.html'; return; }
+                if (r.ok) {
+                    const ok = await r.json().catch(() => ({}));
+                    window.location.href = ok.role === 'buyer' ? '/traffic-buyer.html' : '/traffic.html';
+                    return;
+                }
                 const d = await r.json().catch(() => ({}));
                 errEl.textContent = d.error || 'Ошибка входа';
             } catch (_) {

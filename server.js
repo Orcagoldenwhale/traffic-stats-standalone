@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import { execFile } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = join(__dirname, 'saved_sessions');
@@ -19,6 +20,11 @@ const TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_tra
 const ADMIN_NOTES_FILE = join(__dirname, 'saved_sessions', '_admin_notes.json');
 const KEITARO_LINKS_FILE = join(__dirname, 'saved_sessions', '_keitaro_links.json');
 const SESSIONS_FILE = join(__dirname, 'saved_sessions', '_sessions.json');
+// --- Traffic Buyer (3rd dashboard) — fully dormant until BUYER_* env is set ---
+const TRAFFIC_BUYER_FILE = join(__dirname, 'saved_sessions', '_traffic_buyer.json');
+const TRAFFIC_BUYER_DATA_FILE = join(__dirname, 'saved_sessions', '_traffic_buyer_data.json');
+const TRAFFIC_BUYER_DATA_SNAPSHOT_FILE = join(__dirname, 'saved_sessions', '_traffic_buyer_data_snapshot.json');
+const BUYER_PROXY = (process.env.BUYER_PROXY || '').trim(); // host:port:user:pass (NodeMaven) — Google Sheets read via this proxy
 
 // Ensure saved_sessions directory exists
 if (!existsSync(SESSIONS_DIR)) {
@@ -274,6 +280,7 @@ app.use((req, res, next) => {
 const ACCOUNTS = [];
 if (process.env.TRAFFIC_USER && process.env.TRAFFIC_PASS) ACCOUNTS.push({ user: process.env.TRAFFIC_USER, pass: process.env.TRAFFIC_PASS, role: 'user' });
 if (process.env.ADMIN_USER && process.env.ADMIN_PASS) ACCOUNTS.push({ user: process.env.ADMIN_USER, pass: process.env.ADMIN_PASS, role: 'admin' });
+if (process.env.BUYER_USER && process.env.BUYER_PASS) ACCOUNTS.push({ user: process.env.BUYER_USER, pass: process.env.BUYER_PASS, role: 'buyer' });
 if (ACCOUNTS.length === 0) {
     console.error('[AUTH] No accounts configured — set TRAFFIC_USER/TRAFFIC_PASS and/or ADMIN_USER/ADMIN_PASS. All HTTP access is denied until configured.');
 }
@@ -354,10 +361,24 @@ app.use((req, res, next) => {
         return res.redirect('/login.html');
     }
     req.session = session;
+    // Buyer role is sandboxed to its own dashboard. Additive — only affects role 'buyer' (which can't exist until BUYER_* env is set); user/admin logic untouched.
+    if (session.role === 'buyer') {
+        const buyerOwn = req.path === '/traffic-buyer.html' || req.path.startsWith('/api/traffic-buyer');
+        if (!buyerOwn && (req.path === '/' || req.path === '/traffic.html' || req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic') || req.path.startsWith('/api/keitaro'))) {
+            if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
+            return res.redirect('/traffic-buyer.html');
+        }
+    }
     const adminArea = req.path === '/traffic-admin.html' || req.path.startsWith('/api/traffic-admin') || req.path.startsWith('/api/keitaro');
     if (adminArea && session.role !== 'admin') {
         if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
         return res.status(403).send('<!doctype html><meta charset="utf-8"><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#a1a1aa;font-family:sans-serif"><div>403 — нет доступа к админ-панели. <a style="color:#60a5fa" href="/traffic.html">К Traffic Stats</a></div></body>');
+    }
+    // Buyer area: only buyer + admin (blocks a stats 'user' from the Traffic Buyer dashboard/API). Additive.
+    const buyerArea = req.path === '/traffic-buyer.html' || req.path.startsWith('/api/traffic-buyer');
+    if (buyerArea && session.role !== 'buyer' && session.role !== 'admin') {
+        if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Forbidden' });
+        return res.redirect('/traffic.html');
     }
     next();
 });
@@ -644,13 +665,308 @@ setInterval(() => {
     }
 }, 60000);
 
+// --- Traffic Buyer routes: clone of /api/traffic/* (own files, bell-only, no cross-dashboard transfer) ---
+app.get('/api/traffic-buyer', async (req, res) => {
+    try {
+        if (!existsSync(TRAFFIC_BUYER_FILE)) return res.json([]);
+        const data = JSON.parse(await readFile(TRAFFIC_BUYER_FILE, 'utf-8'));
+        res.json(data);
+    } catch (e) {
+        console.error('[Server] Error reading traffic config:', e.message);
+        res.json([]);
+    }
+});
+
+// POST save traffic data (atomic write)
+app.post('/api/traffic-buyer', async (req, res) => {
+    try {
+        const clientVersion = parseInt(req.query.version || '0', 10);
+        if (clientVersion > 0 && clientVersion < timestamps.traffic_buyer) {
+            return res.status(409).json({ error: 'Conflict: Traffic configuration modified in another tab' });
+        }
+        if (!Array.isArray(req.body)) {
+            return res.status(400).json({ error: 'Data must be an array' });
+        }
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(req.body, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+        auditLog('SAVE', 'traffic-buyer', `${req.body.length} configs`, req);
+        res.json({ ok: true, version: timestamps.traffic_buyer });
+        refreshBuyerData().catch(e => console.error('[Server] Auto-refresh failed:', e));
+    } catch (e) {
+        console.error('[Server] Error saving traffic config:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// DELETE single traffic campaign
+app.delete('/api/traffic-buyer/:name', async (req, res) => {
+    try {
+        const campaignToDelete = req.params.name;
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            if (!existsSync(TRAFFIC_BUYER_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
+            const data = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+            let configs = JSON.parse(data);
+            const initialLength = configs.length;
+            configs = configs.filter(c => c.name !== campaignToDelete);
+            if (configs.length === initialLength) throw Object.assign(new Error('Campaign not found'), { status: 404 });
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(configs, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+        auditLog('DELETE', 'traffic-buyer', `campaign=${campaignToDelete}`, req);
+        res.json({ ok: true, version: timestamps.traffic_buyer });
+    } catch (e) {
+        if (e.status) return res.status(e.status).json({ error: e.message });
+        console.error('[Server] Error deleting traffic config:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// PATCH single traffic campaign properties
+app.patch('/api/traffic-buyer/:name', async (req, res) => {
+    try {
+        const campaignToUpdate = req.params.name;
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
+        const updates = {};
+        for (const key of ALLOWED_PATCH_FIELDS) {
+            if (req.body[key] !== undefined) {
+                const val = req.body[key];
+                if (typeof val === 'string' && val.length > 2000) return res.status(400).json({ error: `Field ${key} too long` });
+                updates[key] = val;
+            }
+        }
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No allowed fields provided' });
+        }
+
+        // Auto-clear task when campaign transitions to BAN status
+        if (updates.customStatus === 'ban') {
+            updates.campTask = '';
+            updates.campTaskUpdatedAt = null;
+        }
+        // Stamp campTaskUpdatedAt so the dropdown can sort newest-first
+        if (Object.prototype.hasOwnProperty.call(updates, 'campTask') && updates.campTaskUpdatedAt === undefined) {
+            updates.campTaskUpdatedAt = (updates.campTask || '').trim() ? new Date().toISOString() : null;
+        }
+
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            if (!existsSync(TRAFFIC_BUYER_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
+            const data = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+            let configs = JSON.parse(data);
+            let found = false;
+            configs = configs.map(c => {
+                if (c.name === campaignToUpdate) { found = true; return { ...c, ...updates }; }
+                return c;
+            });
+            if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(configs, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+
+        auditLog('PATCH', 'traffic-buyer', `campaign=${campaignToUpdate} fields=${Object.keys(updates).join(',')}`, req);
+
+        try {
+            await withFileLock(TRAFFIC_BUYER_DATA_FILE, async () => {
+                if (!existsSync(TRAFFIC_BUYER_DATA_FILE)) return;
+                const cacheRaw = await readFile(TRAFFIC_BUYER_DATA_FILE, 'utf-8');
+                const cache = JSON.parse(cacheRaw);
+                if (cache.data) {
+                    let cacheChanged = false;
+                    for (const [key, camp] of Object.entries(cache.data)) {
+                        if (camp.customName === campaignToUpdate) { Object.assign(camp, updates); cacheChanged = true; }
+                    }
+                    if (cacheChanged) {
+                        // Recompute activeAlerts so the bell dropdown reflects the change immediately.
+                        try {
+                            const configsRaw = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+                            const configs = JSON.parse(configsRaw);
+                            cache.activeAlerts = [
+                                ...findCostAlerts(configs, cache.data, 'buyer'),
+                                ...findKeywordAlerts(configs, cache.data, 'buyer')
+                            ];
+                        } catch (alertsErr) {
+                            console.error('[Server] Non-critical: failed to recompute activeAlerts:', alertsErr.message);
+                        }
+                        const ctmpId = Date.now() + Math.random().toString(36).slice(2);
+                        const ctmpFile = TRAFFIC_BUYER_DATA_FILE + '.' + ctmpId + '.tmp';
+                        await writeFile(ctmpFile, JSON.stringify(cache), 'utf-8');
+                        await rename(ctmpFile, TRAFFIC_BUYER_DATA_FILE);
+                        timestamps.traffic_buyer_data = Date.now();
+                    }
+                }
+            });
+        } catch (cacheErr) {
+            console.error('[Server] Non-critical: failed to update cache inline:', cacheErr.message);
+        }
+
+        // Buyer: bell-only — immediate Telegram alert intentionally skipped.
+
+        res.json({ ok: true });
+    } catch (e) {
+        if (e.status) return res.status(e.status).json({ error: e.message });
+        console.error('[Server] Error updating traffic config:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// PUT edit traffic campaign (name + url)
+app.put('/api/traffic-buyer/:name/edit', async (req, res) => {
+    try {
+        const oldName = req.params.name;
+        const { newName, newUrl, newSiteUrl } = req.body;
+        if (!newName || !newUrl) return res.status(400).json({ error: 'newName and newUrl are required' });
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            if (!existsSync(TRAFFIC_BUYER_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
+            const data = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+            let configs = JSON.parse(data);
+            let found = false;
+            configs = configs.map(c => {
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || '') }; }
+                return c;
+            });
+            if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(configs, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+        auditLog('EDIT', 'traffic-buyer', `old=${oldName} new=${newName}`, req);
+        res.json({ ok: true });
+        refreshBuyerData({ onlyCampaignName: newName }).catch(e => console.error('[Server] Auto-refresh after edit failed:', e));
+    } catch (e) {
+        if (e.status) return res.status(e.status).json({ error: e.message });
+        console.error('[Server] Error editing traffic config:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// PUT replace traffic config order
+app.put('/api/traffic-buyer/reorder', async (req, res) => {
+    try {
+        const newOrderNames = req.body.names;
+        if (!Array.isArray(newOrderNames)) return res.status(400).json({ error: 'Expected names array' });
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            if (!existsSync(TRAFFIC_BUYER_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
+            const data = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+            const configs = JSON.parse(data);
+            const seen = new Set();
+            const newConfigs = [];
+            for (const name of newOrderNames) { if (seen.has(name)) continue; seen.add(name); const found = configs.find(c => c.name === name); if (found) newConfigs.push(found); }
+            for (const c of configs) { if (!seen.has(c.name)) newConfigs.push(c); }
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(newConfigs, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+        auditLog('REORDER', 'traffic-buyer', `${newOrderNames.length} items`, req);
+        res.json({ ok: true });
+    } catch (e) {
+        if (e.status) return res.status(e.status).json({ error: e.message });
+        console.error('[Server] Error reordering traffic configs:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Beacon fallback for reorder (sendBeacon sends POST, not PUT)
+app.post('/api/traffic-buyer/reorder-beacon', async (req, res) => {
+    try {
+        const newOrderNames = req.body.names;
+        if (!Array.isArray(newOrderNames)) return res.status(400).end();
+        await withFileLock(TRAFFIC_BUYER_FILE, async () => {
+            if (!existsSync(TRAFFIC_BUYER_FILE)) throw new Error('not found');
+            const data = await readFile(TRAFFIC_BUYER_FILE, 'utf-8');
+            const configs = JSON.parse(data);
+            const seen = new Set();
+            const newConfigs = [];
+            for (const name of newOrderNames) { if (seen.has(name)) continue; seen.add(name); const found = configs.find(c => c.name === name); if (found) newConfigs.push(found); }
+            for (const c of configs) { if (!seen.has(c.name)) newConfigs.push(c); }
+            await createBackup(TRAFFIC_BUYER_FILE);
+            const tmpId = Date.now() + Math.random().toString(36).slice(2);
+            const tmpFile = TRAFFIC_BUYER_FILE + '.' + tmpId + '.tmp';
+            await writeFile(tmpFile, JSON.stringify(newConfigs, null, 2), 'utf-8');
+            await rename(tmpFile, TRAFFIC_BUYER_FILE);
+            timestamps.traffic_buyer = Date.now();
+        });
+        auditLog('REORDER-BEACON', 'traffic-buyer', `${newOrderNames.length} items`, req);
+        res.status(200).end();
+    } catch (e) {
+        console.error('[Server] Error reordering (beacon):', e.message);
+        res.status(500).end();
+    }
+});
+
+// --- Move campaign from Traffic Stats to Traffic Admin ---
+app.post('/api/traffic-buyer/refresh', async (req, res) => {
+    auditLog('REFRESH', 'traffic_buyer_data', 'manual', req);
+    res.json({ success: true, started: true });
+    refreshBuyerData().catch(e => console.error('[Server] Manual refresh failed:', e.message));
+});
+
+app.post('/api/traffic-buyer/:name/refresh', async (req, res) => {
+    try {
+        const campaignName = req.params.name;
+        auditLog('REFRESH', 'traffic_buyer_data', `single:${campaignName}`, req);
+        await refreshBuyerData({ onlyCampaignName: campaignName });
+        res.json({ success: true });
+    } catch (e) {
+        console.error('[Server] Single refresh failed:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// GET cached traffic data
+app.get('/api/traffic-buyer-data', async (req, res) => {
+    try {
+        if (!existsSync(TRAFFIC_BUYER_DATA_FILE)) {
+            return res.json({ success: true, data: {} });
+        }
+        const raw = await readFile(TRAFFIC_BUYER_DATA_FILE, 'utf-8');
+        res.setHeader('Content-Type', 'application/json');
+        res.send(withImpressionsStale(raw));
+    } catch (e) {
+        console.error('[Server] Error reading traffic-data cache:', e.message);
+        res.json({ success: true, data: {} });
+    }
+});
+
+// --- Snapshot API ---
+app.get('/api/traffic-buyer-data-snapshot', async (req, res) => {
+    try {
+        if (!existsSync(TRAFFIC_BUYER_DATA_SNAPSHOT_FILE)) return res.json({ success: false, data: {}, snapshotAt: null });
+        const raw = await readFile(TRAFFIC_BUYER_DATA_SNAPSHOT_FILE, 'utf-8');
+        res.setHeader('Content-Type', 'application/json');
+        res.send(withImpressionsStale(raw));
+    } catch (e) {
+        res.json({ success: false, data: {}, snapshotAt: null });
+    }
+});
+
+
+
 if (existsSync(DIST_DIR)) {
     app.use(express.static(DIST_DIR));
 }
 app.use(express.static(PUBLIC_DIR));
 
 // --- Sync Timestamps ---
-let timestamps = { data: Date.now(), chessboard: Date.now(), assets: Date.now(), traffic: Date.now(), traffic_data: Date.now(), traffic_admin: Date.now(), traffic_admin_data: Date.now(), admin_notes: Date.now() };
+let timestamps = { data: Date.now(), chessboard: Date.now(), assets: Date.now(), traffic: Date.now(), traffic_data: Date.now(), traffic_admin: Date.now(), traffic_admin_data: Date.now(), traffic_buyer: Date.now(), traffic_buyer_data: Date.now(), admin_notes: Date.now() };
 
 app.get('/api/status', (req, res) => {
     res.json(timestamps);
@@ -2622,7 +2938,7 @@ let _lastSnapshotDate = '';
 async function saveDataSnapshot() {
     const ts = new Date().toISOString();
     try {
-        for (const [src, dst] of [[TRAFFIC_DATA_FILE, TRAFFIC_DATA_SNAPSHOT_FILE], [TRAFFIC_ADMIN_DATA_FILE, TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE]]) {
+        for (const [src, dst] of [[TRAFFIC_DATA_FILE, TRAFFIC_DATA_SNAPSHOT_FILE], [TRAFFIC_ADMIN_DATA_FILE, TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE], [TRAFFIC_BUYER_DATA_FILE, TRAFFIC_BUYER_DATA_SNAPSHOT_FILE]]) {
             if (!existsSync(src)) continue;
             const raw = await readFile(src, 'utf-8');
             const parsed = JSON.parse(raw);
@@ -2696,9 +3012,389 @@ setInterval(() => {
 }, 60000);
 
 // Sequential refresh: stats first, then admin — avoids overloading Google API
+// --- Traffic Buyer worker (clone of stats worker; Google Sheets read via NodeMaven proxy; bell-only, no Telegram) ---
+let _buyerRefreshLock = false;
+const _buyerProxyParts = BUYER_PROXY ? BUYER_PROXY.split(':') : [];
+const _buyerProxyHostPort = _buyerProxyParts.length >= 2 ? _buyerProxyParts[0] + ':' + _buyerProxyParts[1] : '';
+const _buyerProxyAuth = _buyerProxyParts.length >= 4 ? _buyerProxyParts[2] + ':' + _buyerProxyParts.slice(3).join(':') : '';
+// fetch-compatible wrapper ({ ok, status, text() }) that routes a GET through the proxy via system curl.
+function fetchBuyerSheet(url, timeoutMs = 15000, retries = 1) {
+    return new Promise((resolve) => {
+        if (!_buyerProxyHostPort) return resolve({ ok: false, status: 0, text: async () => '' });
+        const run = (left) => {
+            const args = ['-sL', '--max-time', String(Math.max(5, Math.ceil(timeoutMs / 1000))), '-x', _buyerProxyHostPort];
+            if (_buyerProxyAuth) args.push('-U', _buyerProxyAuth);
+            args.push('-w', '\\n%{http_code}', url);
+            execFile('curl', args, { maxBuffer: 25 * 1024 * 1024 }, (err, stdout) => {
+                if (err) {
+                    if (left > 0) return setTimeout(() => run(left - 1), 1500);
+                    return resolve({ ok: false, status: 0, text: async () => '' });
+                }
+                const nl = stdout.lastIndexOf('\n');
+                const code = nl >= 0 ? (parseInt(stdout.slice(nl + 1), 10) || 0) : 0;
+                const body = nl >= 0 ? stdout.slice(0, nl) : stdout;
+                resolve({ ok: code >= 200 && code < 300, status: code, text: async () => body });
+            });
+        };
+        run(retries);
+    });
+}
+
+async function refreshBuyerData(options = {}) {
+    const { onlyCampaignName = null } = options;
+    if (onlyCampaignName) {
+        const waitStart = Date.now();
+        while (_buyerRefreshLock && (Date.now() - waitStart) < 5 * 60 * 1000) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+    }
+    if (_buyerRefreshLock) {
+        console.log('[Worker-Buyer] Refresh already in progress, skipping.');
+        return;
+    }
+    _buyerRefreshLock = true;
+    console.log(`[Worker-Buyer] Starting background refresh of Traffic Data${onlyCampaignName ? ` (single: ${onlyCampaignName})` : ''} from Google Sheets...`);
+    try {
+        let configs = [];
+        if (existsSync(TRAFFIC_BUYER_FILE)) {
+            configs = JSON.parse(await readFile(TRAFFIC_BUYER_FILE, 'utf-8'));
+        }
+
+        let targetConfigs = configs;
+        let allCampaignsMap = {};
+        let previousMap = {};
+        // Загружаем предыдущий кэш, чтобы сохранять impressionsSince между обновлениями
+        if (existsSync(TRAFFIC_BUYER_DATA_FILE)) {
+            try {
+                const cachedRaw = await readFile(TRAFFIC_BUYER_DATA_FILE, 'utf-8');
+                const cached = JSON.parse(cachedRaw);
+                previousMap = cached.data || {};
+            } catch (e) { /* ignore broken cache */ }
+        }
+        // Всегда стартуем с предыдущего кэша. Это защищает от потери записей
+        // при transient-сбоях Google Sheets (timeout / rate-limit / пустой ответ):
+        // старые записи каждого customName удаляются ТОЛЬКО перед записью новых
+        // (внутри цикла, и только при успешном fetch).
+        allCampaignsMap = { ...previousMap };
+        if (onlyCampaignName) {
+            targetConfigs = configs.filter(c => c.name === onlyCampaignName);
+            if (!targetConfigs.length) {
+                console.warn(`[Worker-Buyer] Single refresh requested for unknown campaign: ${onlyCampaignName}`);
+                return;
+            }
+        }
+
+        const rates = await getExchangeRates();
+
+        for (const config of targetConfigs) {
+            if (config.customStatus === 'ban') {
+                // Не парсим Google Sheets (бережём метрики), но синхронизируем
+                // мета-поля из конфига в кеш, чтобы изменения статуса/задачи отражались.
+                for (const k of Object.keys(allCampaignsMap)) {
+                    const camp = allCampaignsMap[k];
+                    if (!camp || camp.customName !== config.name) continue;
+                    camp.customStatus = 'ban';
+                    camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
+                    camp.campNote = config.campNote || '';
+                    camp.comment = config.comment || '';
+                    camp.siteUrl = config.siteUrl || '';
+                    camp.costAlert = config.costAlert || 0;
+                    camp.costAlertNote = config.costAlertNote || '';
+                    camp.campTimer = config.campTimer || 0;
+                    camp.primaryKeyword = config.primaryKeyword || '';
+                }
+                continue;
+            }
+            try {
+                const { url, name: customName } = config;
+                if (!url) continue;
+
+                const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+                if (!match) continue;
+                const sheetId = match[1];
+                const campaigns = {};
+
+                // 0. Fetch Info sheet to get currency + updated_at
+                let sheetCurrency = 'USD';
+                let infoUpdatedAt = null;
+                try {
+                    const infoUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Info`;
+                    const infoRes = await fetchBuyerSheet(infoUrl, 10000, 0);
+                    if (infoRes.ok) {
+                        const infoText = await infoRes.text();
+                        if (!infoText.startsWith('<html')) {
+                            const infoData = parseCSV(infoText);
+                            const hdr = infoData[0] || [];
+                            const currIdx = hdr.findIndex(h => h.toLowerCase() === 'currency');
+                            if (currIdx !== -1 && infoData.length > 1 && infoData[1][currIdx]) {
+                                sheetCurrency = infoData[1][currIdx].trim().toUpperCase();
+                            }
+                            const updIdx = hdr.findIndex(h => h.toLowerCase() === 'updated_at');
+                            if (updIdx !== -1 && infoData.length > 1 && infoData[1][updIdx]) {
+                                infoUpdatedAt = parseSheetDate(infoData[1][updIdx]);
+                            }
+                        }
+                    }
+                } catch (e) { /* No Info sheet — assume USD */ }
+
+                // 1. Fetch Campaign Stats sheet
+                const statsUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Статистика_Кампаний')}`;
+                const statsRes = await fetchBuyerSheet(statsUrl);
+                if (statsRes.ok) {
+                    const statsText = await statsRes.text();
+                    if (!statsText.startsWith('<html')) {
+                        const statsData = parseCSV(statsText);
+                        for (let i = 1; i < statsData.length; i++) {
+                            const row = statsData[i];
+                            if (row.length < 6) continue;
+                            const campName = row[0], statusStr = row[1], period = row[2], impStr = row[3], clicksStr = row[4], costStr = row[5];
+                            if (!campName || campName === 'Кампания') continue;
+
+                            if (!campaigns[campName]) {
+                                campaigns[campName] = {
+                                    name: campName,
+                                    customName: customName || campName,
+                                    url: url,
+                                    status: statusStr === 'ENABLED' ? 'ACTIVE' : statusStr === 'PAUSED' ? 'PAUSED' : statusStr === 'REMOVED' ? 'REMOVED' : 'LIMITED',
+                                    stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } },
+                                    queries: []
+                                };
+                            }
+                            if (period === 'Сегодня') {
+                                campaigns[campName].stats.today.impressions += parseInt(impStr, 10) || 0;
+                                campaigns[campName].stats.today.clicks += parseInt(clicksStr, 10) || 0;
+                                campaigns[campName].stats.today.cost += parseFloat(costStr.replace(',', '.')) || 0;
+                            } else if (period === 'Все время') {
+                                campaigns[campName].stats.allTime.impressions += parseInt(impStr, 10) || 0;
+                                campaigns[campName].stats.allTime.clicks += parseInt(clicksStr, 10) || 0;
+                                campaigns[campName].stats.allTime.cost += parseFloat(costStr.replace(',', '.')) || 0;
+                            }
+                        }
+                    }
+                }
+
+                // 2. Fetch Search Terms sheet
+                const termsUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Поисковые_запросы_Сегодня')}`;
+                const termsRes = await fetchBuyerSheet(termsUrl);
+                if (termsRes.ok) {
+                    const termsText = await termsRes.text();
+                    if (!termsText.startsWith('<html')) {
+                        const termsData = parseCSV(termsText);
+                        for (let i = 1; i < termsData.length; i++) {
+                            const row = termsData[i];
+                            if (row.length < 6) continue;
+                            const term = row[0], campName = row[1], adGroup = row[2], impStr = row[3], clicksStr = row[4], costStr = row[5];
+                            if (!campName || !term || term === 'Поисковый запрос') continue;
+
+                            if (!campaigns[campName]) {
+                                campaigns[campName] = {
+                                    name: campName,
+                                    stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } },
+                                    queries: []
+                                };
+                            }
+
+                            campaigns[campName].queries.push({
+                                id: Math.random().toString(36).substr(2, 9),
+                                text: term,
+                                impressions: parseInt(impStr, 10) || 0,
+                                clicks: parseInt(clicksStr, 10) || 0,
+                                cost: parseFloat(costStr.replace(',', '.')) || 0,
+                                adGroup
+                            });
+                        }
+                    }
+                }
+
+                // 3. Fetch Keywords sheet (optional — only exists in new script)
+                try {
+                    const kwUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Рабочие_Ключи')}`;
+                    const kwRes = await fetchBuyerSheet(kwUrl);
+                    if (kwRes.ok) {
+                        const kwText = await kwRes.text();
+                        if (!kwText.startsWith('<html')) {
+                            const kwData = parseCSV(kwText);
+                            for (let i = 1; i < kwData.length; i++) {
+                                const row = kwData[i];
+                                if (row.length < 7) continue;
+                                const keyword = row[0], kwStatus = row[1], campName = row[2], adGroup = row[3], impStr = row[4], clicksStr = row[5], costStr = row[6];
+                                if (!campName || !keyword || keyword === 'Ключевое слово') continue;
+                                if (!campaigns[campName]) {
+                                    campaigns[campName] = { name: campName, stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } }, queries: [], keywords: [], adTexts: [] };
+                                }
+                                if (!campaigns[campName].keywords) campaigns[campName].keywords = [];
+                                campaigns[campName].keywords.push({
+                                    id: Math.random().toString(36).substr(2, 9),
+                                    text: keyword, status: kwStatus, adGroup,
+                                    impressions: parseInt(impStr, 10) || 0,
+                                    clicks: parseInt(clicksStr, 10) || 0,
+                                    cost: parseFloat(costStr.replace(',', '.')) || 0
+                                });
+                            }
+                        }
+                    }
+                } catch (e) { /* Sheet doesn't exist in old scripts — safe to ignore */ }
+
+                // 4. Fetch Ad Texts sheet (optional — only exists in new script)
+                try {
+                    const adUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Тексты_Объявлений')}`;
+                    const adRes = await fetchBuyerSheet(adUrl);
+                    if (adRes.ok) {
+                        const adText = await adRes.text();
+                        if (!adText.startsWith('<html')) {
+                            const adData = parseCSV(adText);
+                            for (let i = 1; i < adData.length; i++) {
+                                const row = adData[i];
+                                if (row.length < 8) continue;
+                                const campName = row[0], adGroup = row[1], adType = row[2], headlines = row[3], descriptions = row[4], impStr = row[5], clicksStr = row[6], costStr = row[7];
+                                if (!campName || campName === 'Кампания') continue;
+                                if (!campaigns[campName]) {
+                                    campaigns[campName] = { name: campName, stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } }, queries: [], keywords: [], adTexts: [] };
+                                }
+                                if (!campaigns[campName].adTexts) campaigns[campName].adTexts = [];
+                                campaigns[campName].adTexts.push({
+                                    id: Math.random().toString(36).substr(2, 9),
+                                    adGroup, type: adType, headlines, descriptions,
+                                    impressions: parseInt(impStr, 10) || 0,
+                                    clicks: parseInt(clicksStr, 10) || 0,
+                                    cost: parseFloat(costStr.replace(',', '.')) || 0
+                                });
+                            }
+                        }
+                    }
+                } catch (e) { /* Sheet doesn't exist in old scripts — safe to ignore */ }
+
+                // 5. Fetch Metadata sheet
+                let sheetLastUpdated = null;
+                try {
+                    const metaUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('Метаданные')}`;
+                    const metaRes = await fetchBuyerSheet(metaUrl);
+                    if (metaRes.ok) {
+                        const metaText = await metaRes.text();
+                        if (!metaText.startsWith('<html')) {
+                            const metaData = parseCSV(metaText);
+                            let rawDate = null;
+                            // Support horizontal (new) structure
+                            const headerIdx = metaData[0] ? metaData[0].findIndex(h => h === 'updated_at' || h === 'Последнее обновление') : -1;
+                            if (headerIdx !== -1 && metaData.length > 1) {
+                                rawDate = metaData[1][headerIdx];
+                            } else {
+                                // Support vertical (old) structure
+                                for (let i = 1; i < metaData.length; i++) {
+                                    if (metaData[i][0] === 'Последнее обновление' && metaData[i][1]) {
+                                        rawDate = metaData[i][1];
+                                    }
+                                }
+                            }
+                            sheetLastUpdated = parseSheetDate(rawDate);
+                        }
+                    }
+                } catch (e) {
+                    // Ignore missing metadata
+                }
+
+                const readAt = new Date().toISOString();
+                // Старые записи этого customName удаляем ТОЛЬКО если fetch вернул
+                // хоть какие-то кампании. При пустом ответе (Google rate-limit / timeout)
+                // прежние данные сохранятся, и кампания не «исчезнет» из UI.
+                if (Object.keys(campaigns).length > 0) {
+                    for (const key of Object.keys(allCampaignsMap)) {
+                        if (allCampaignsMap[key] && allCampaignsMap[key].customName === config.name) {
+                            delete allCampaignsMap[key];
+                        }
+                    }
+                }
+                for (const [campName, camp] of Object.entries(campaigns)) {
+                    // Fallback: if today stats are zero but queries exist, compute from queries
+                    if (camp.stats.today.impressions === 0 && camp.stats.today.clicks === 0 && camp.queries && camp.queries.length > 0) {
+                        let qImp = 0, qClk = 0, qCost = 0;
+                        for (const q of camp.queries) { qImp += q.impressions; qClk += q.clicks; qCost += q.cost; }
+                        if (qImp > 0) {
+                            camp.stats.today.impressions = qImp;
+                            camp.stats.today.clicks = qClk;
+                            camp.stats.today.cost = qCost;
+                        }
+                    }
+                    if (sheetCurrency !== 'USD' && _exchangeRates[sheetCurrency]) {
+                        camp.stats.today.cost = convertToUSD(camp.stats.today.cost, sheetCurrency);
+                        camp.stats.allTime.cost = convertToUSD(camp.stats.allTime.cost, sheetCurrency);
+                        if (camp.queries) camp.queries.forEach(q => { q.cost = convertToUSD(q.cost, sheetCurrency); });
+                        if (camp.keywords) camp.keywords.forEach(k => { k.cost = convertToUSD(k.cost, sheetCurrency); });
+                        if (camp.adTexts) camp.adTexts.forEach(a => { a.cost = convertToUSD(a.cost, sheetCurrency); });
+                        camp.currency = sheetCurrency;
+                    }
+                    camp.sheetLastUpdated = sheetLastUpdated || infoUpdatedAt;
+                    camp.lastReadAt = readAt;
+                    camp.url = config.url;
+                    camp.customName = config.name;
+                    camp.comment = config.comment || '';
+                    camp.customStatus = config.customStatus || 'warmup';
+                    camp.siteUrl = config.siteUrl || '';
+                    camp.addedAt = config.addedAt || '';
+                    camp.costAlert = config.costAlert || 0;
+                    camp.campTask = config.campTask || '';
+                    camp.campTaskUpdatedAt = config.campTaskUpdatedAt || null;
+                    camp.campNote = config.campNote || '';
+                    camp.costAlertNote = config.costAlertNote || '';
+                    camp.campTimer = config.campTimer || 0;
+                    camp.primaryKeyword = config.primaryKeyword || '';
+                    const globalKey = `${config.name}_${campName}`;
+                    // Счётчик «показы не меняются»: если impressions за сегодня те же,
+                    // что и в предыдущем кэше — сохраняем старый impressionsSince,
+                    // иначе ставим текущее время.
+                    const prev = previousMap[globalKey];
+                    const prevImp = prev && prev.stats && prev.stats.today ? prev.stats.today.impressions : undefined;
+                    if (prev && prev.impressionsSince && prevImp === camp.stats.today.impressions) {
+                        camp.impressionsSince = prev.impressionsSince;
+                    } else {
+                        camp.impressionsSince = readAt;
+                    }
+                    allCampaignsMap[globalKey] = camp;
+                }
+                
+            } catch (urlErr) {
+                console.error(`[Worker-Buyer] Error fetching Google Sheet ${config.url}:`, urlErr.message);
+            }
+        }
+
+        // Глобальный refresh: убираем «осиротевшие» записи (configов с такими customName уже нет).
+        // Для single-refresh не делаем — он не должен трогать чужие записи.
+        if (!onlyCampaignName) {
+            const configNamesSet = new Set(configs.map(c => c.name));
+            for (const key of Object.keys(allCampaignsMap)) {
+                const cn = allCampaignsMap[key] && allCampaignsMap[key].customName;
+                if (!cn || !configNamesSet.has(cn)) {
+                    delete allCampaignsMap[key];
+                }
+            }
+        }
+
+        // Compute active alerts (mirrors what would be sent to Telegram).
+        const activeAlerts = [
+            ...findCostAlerts(configs, allCampaignsMap, 'buyer'),
+            ...findKeywordAlerts(configs, allCampaignsMap, 'buyer')
+        ];
+
+        // Atomic write to cache file
+        const tmpId = Date.now() + Math.random().toString(36).slice(2);
+        const tmpFile = TRAFFIC_BUYER_DATA_FILE + '.' + tmpId + '.tmp';
+        await writeFile(tmpFile, JSON.stringify({ success: true, data: allCampaignsMap, activeAlerts }), 'utf-8');
+        await rename(tmpFile, TRAFFIC_BUYER_DATA_FILE);
+        timestamps.traffic_buyer_data = Date.now();
+        console.log(`[Worker-Buyer] Traffic Data refreshed successfully. ${Object.keys(allCampaignsMap).length} campaigns cached. ${activeAlerts.length} active alerts.`);
+        // Buyer: bell-only — Telegram alert-sending intentionally skipped.
+    } catch (e) {
+        console.error('[Worker-Buyer] Fatal error refreshing Traffic Data:', e);
+    } finally {
+        _buyerRefreshLock = false;
+    }
+}
+
 async function refreshAll() {
     await refreshTrafficData();
     await refreshTrafficAdminData();
+    if (process.env.BUYER_USER && BUYER_PROXY) { await refreshBuyerData().catch(e => console.error('[Worker-Buyer] refreshAll error:', e.message)); }
 }
 
 // Однократный ремонт кэша при старте: перепарсить sheetLastUpdated через parseSheetDate.

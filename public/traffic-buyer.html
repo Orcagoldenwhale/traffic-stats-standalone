@@ -1,0 +1,2557 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Ops - Buyer</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0b0e'/%3E%3Crect x='6' y='18' width='5' height='8' rx='1.5' fill='%23a78bfa'/%3E%3Crect x='13.5' y='12' width='5' height='14' rx='1.5' fill='%23a78bfa'/%3E%3Crect x='21' y='7' width='5' height='19' rx='1.5' fill='%23a78bfa'/%3E%3C/svg%3E">
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+        body {
+            background-color: #09090b;
+            /* Zinc 950 */
+            color: #e4e4e7;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            height: 6px;
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #18181b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #3f3f46;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #52525b;
+        }
+
+        /* Smooth Accordion Animation */
+        .accordion-content {
+            transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+
+        .accordion-content.expanded {
+            max-height: 1000px;
+            /* Arbitrary large number for max-height transition */
+            opacity: 1;
+        }
+
+        /* Table styling */
+        .queries-table th {
+            position: sticky;
+            top: 0;
+            background-color: #18181b;
+            z-index: 10;
+        }
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        dark: '#09090b',
+                        panel: '#18181b',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+
+<body class="h-screen w-screen overflow-hidden flex flex-col">
+    <div id="root" class="h-full w-full flex flex-col"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // --- Session-expiry guard ---
+        // If a request comes back 401 (dead session after a server restart or 12h TTL), do NOT swallow it:
+        // surface a blocking overlay so edits are never lost silently. Unsaved text stays in the fields.
+        let __authExpired = false;
+        function flagAuthExpired() {
+            if (__authExpired) return;
+            __authExpired = true;
+            window.dispatchEvent(new CustomEvent('auth-expired'));
+        }
+
+        // --- Flush pending autosaves before the tab closes/hides, so a debounced (800ms) note/comment
+        // is never lost if the user closes the tab right after typing. Each row registers a flush fn here.
+        const __dirtyFlushers = new Set();
+        function __flushAllDirty() { __dirtyFlushers.forEach(f => { try { f(); } catch (e) {} }); }
+        window.addEventListener('pagehide', __flushAllDirty);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') __flushAllDirty(); });
+
+        function SessionExpiredOverlay() {
+            const [show, setShow] = useState(false);
+            useEffect(() => {
+                const h = () => setShow(true);
+                window.addEventListener('auth-expired', h);
+                return () => window.removeEventListener('auth-expired', h);
+            }, []);
+            if (!show) return null;
+            return (
+                <div style={{position:'fixed',inset:0,zIndex:99999,background:'rgba(0,0,0,0.85)',backdropFilter:'blur(2px)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    <div style={{maxWidth:'440px',margin:'16px',background:'#18181b',border:'1px solid #ef4444',borderRadius:'14px',padding:'28px',textAlign:'center',fontFamily:'sans-serif'}}>
+                        <div style={{fontSize:'42px',marginBottom:'10px'}}>⚠️</div>
+                        <div style={{fontSize:'17px',fontWeight:700,color:'#f87171',marginBottom:'10px'}}>Сессия истекла</div>
+                        <div style={{fontSize:'13px',lineHeight:1.6,color:'#a1a1aa',marginBottom:'20px'}}>
+                            Последние изменения <b style={{color:'#e4e4e7'}}>не сохранены</b>. Ваш текст остался в полях и не потерян.<br/>
+                            Откройте вход <b style={{color:'#e4e4e7'}}>в новой вкладке</b>, войдите, вернитесь сюда и сохраните снова.
+                        </div>
+                        <a href="/login.html" target="_blank" rel="noopener" style={{display:'inline-block',background:'#ef4444',color:'#fff',padding:'11px 22px',borderRadius:'9px',fontSize:'14px',fontWeight:600,textDecoration:'none'}}>Войти заново</a>
+                        <div style={{marginTop:'14px'}}>
+                            <button onClick={() => window.location.reload()} style={{background:'none',border:'none',color:'#71717a',fontSize:'12px',cursor:'pointer',textDecoration:'underline'}}>Обновить страницу</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- CUSTOM STATUS CONFIG ---
+        const CUSTOM_STATUSES = [
+            { key: 'warmup', label: 'ПРОГРЕВ', color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: 'fa-fire' },
+            { key: 'verif', label: 'ВЕРИФ', color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/20', icon: 'fa-shield-alt' },
+            { key: 'live', label: 'БОЕВОЙ', color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20', icon: 'fa-rocket' },
+            { key: 'ban', label: 'БАН', color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20', icon: 'fa-ban' },
+        ];
+        const STATUS_MAP = Object.fromEntries(CUSTOM_STATUSES.map(s => [s.key, s]));
+        const DEFAULT_STATUS = CUSTOM_STATUSES[0];
+
+        // --- MOCK DATA (Имитация ответа от твоего Google Ads скрипта) ---
+        const mockCampaignsData = [];
+
+        // --- Clipboard helper (works over HTTP and HTTPS) ---
+        function copyToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            return Promise.resolve();
+        }
+
+        // --- COMPONENTS ---
+
+        const formatCurrency = (val) => {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+        };
+
+        const formatNumber = (val) => {
+            return new Intl.NumberFormat('ru-RU').format(val);
+        };
+
+        const CampaignRow = ({ data, onRefresh, index, onDragStart, onDragEnter, onDragEnd, isDraggedOver, isDragged }) => {
+            const [isExpanded, setIsExpanded] = useState(false);
+            const [isRefreshing, setIsRefreshing] = useState(false);
+            const [isDeleting, setIsDeleting] = useState(false);
+            const [showEditModal, setShowEditModal] = useState(false);
+            const [editName, setEditName] = useState(data.customName);
+            const [editUrl, setEditUrl] = useState(data.url || '');
+            const [editSiteUrl, setEditSiteUrl] = useState(data.siteUrl || '');
+            const [isSavingEdit, setIsSavingEdit] = useState(false);
+            
+            const [comment, setComment] = useState(data.comment || '');
+            const [isSavingComment, setIsSavingComment] = useState(false);
+            const [showAlertPopup, setShowAlertPopup] = useState(false);
+            const [alertValue, setAlertValue] = useState(data.costAlert || '');
+            const [costAlert, setCostAlert] = useState(data.costAlert || 0);
+            const [costAlertNote, setCostAlertNote] = useState(data.costAlertNote || '');
+            const [campTask, setCampTask] = useState(data.campTask || '');
+            const [showTaskPopup, setShowTaskPopup] = useState(false);
+            const [taskInput, setTaskInput] = useState('');
+            const [campNote, setCampNote] = useState(data.campNote || '');
+            const [isSavingNote, setIsSavingNote] = useState(false);
+            const [campTimer, setCampTimer] = useState(data.campTimer || 0);
+            const [, forceUpdate] = useState(0);
+
+            const handleSaveAlert = async () => {
+                const val = parseFloat(alertValue) || 0;
+                setCostAlert(val);
+                setShowAlertPopup(false);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ costAlert: val, costAlertNote }), keepalive: true
+                    });
+                } catch (e) { console.error('Failed to save alert', e); }
+            };
+            const handleDisableAlert = async () => {
+                setCostAlert(0);
+                setAlertValue('');
+                setCostAlertNote('');
+                setShowAlertPopup(false);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ costAlert: 0, costAlertNote: '' }), keepalive: true
+                    });
+                } catch (e) { console.error('Failed to disable alert', e); }
+            };
+            const handleSaveTask = async (text) => {
+                setCampTask(text);
+                setShowTaskPopup(false);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ campTask: text }), keepalive: true
+                    });
+                } catch (e) { console.error('Failed to save task', e); }
+            };
+            const TIMER_DURATION = 24 * 60 * 60 * 1000;
+            const timerActive = campTimer > 0 && (Date.now() - campTimer) < TIMER_DURATION;
+            const timerProgress = timerActive ? Math.max(0, 1 - (Date.now() - campTimer) / TIMER_DURATION) : 0;
+
+            useEffect(() => {
+                if (!timerActive) return;
+                const iv = setInterval(() => forceUpdate(n => n + 1), 30000);
+                return () => clearInterval(iv);
+            }, [timerActive]);
+
+            const handleToggleTimer = async () => {
+                const newVal = timerActive ? 0 : Date.now();
+                setCampTimer(newVal);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ campTimer: newVal }), keepalive: true
+                    });
+                } catch (e) { console.error('Failed to save timer', e); }
+            };
+
+            const commentTimer = useRef(null);
+            const lastSavedComment = useRef(data.comment || '');
+
+            const hasQueries = data.queries && data.queries.length > 0;
+            const hasKeywords = data.keywords && data.keywords.length > 0;
+            const hasAdTexts = data.adTexts && data.adTexts.length > 0;
+            const hasAnyExpand = hasQueries || hasKeywords || hasAdTexts;
+            const [activeTab, setActiveTab] = useState(hasQueries ? 'queries' : hasKeywords ? 'keywords' : 'adTexts');
+            const [customStatus, setCustomStatus] = useState(data.customStatus || 'warmup');
+            const [showStatusPicker, setShowStatusPicker] = useState(false);
+            const statusInfo = STATUS_MAP[customStatus] || DEFAULT_STATUS;
+
+            const [primaryKeyword, setPrimaryKeyword] = useState(data.primaryKeyword || '');
+            React.useEffect(() => { setPrimaryKeyword(data.primaryKeyword || ''); }, [data.primaryKeyword]);
+
+            const handlePrimaryKeywordToggle = async (kwText) => {
+                const next = (primaryKeyword || '').trim().toLowerCase() === (kwText || '').trim().toLowerCase() ? '' : kwText;
+                setPrimaryKeyword(next);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ primaryKeyword: next }),
+                        keepalive: true
+                    });
+                } catch (e) { console.error('Failed to save primary keyword', e); }
+            };
+
+            const handleStatusChange = async (newKey) => {
+                setCustomStatus(newKey);
+                setShowStatusPicker(false);
+                try {
+                    await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ customStatus: newKey }),
+                        keepalive: true
+                    });
+                } catch (e) { console.error('Failed to save status', e); }
+            };
+
+            const saveComment = useCallback(async (value) => {
+                if (value === lastSavedComment.current) return;
+                setIsSavingComment(true);
+                try {
+                    const res = await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ comment: value }),
+                        keepalive: true
+                    });
+                    if (res.ok) lastSavedComment.current = value;
+                    else if (res.status === 401) flagAuthExpired();
+                } catch(e) {
+                    console.error('Failed to save comment', e);
+                } finally {
+                    setIsSavingComment(false);
+                }
+            }, [data.customName]);
+
+            const handleCommentChange = useCallback((e) => {
+                const val = e.target.value;
+                setComment(val);
+                if (commentTimer.current) clearTimeout(commentTimer.current);
+                commentTimer.current = setTimeout(() => saveComment(val), 800);
+            }, [saveComment]);
+
+            const handleCommentBlur = useCallback(() => {
+                if (commentTimer.current) clearTimeout(commentTimer.current);
+                saveComment(comment);
+            }, [comment, saveComment]);
+
+            useEffect(() => () => { if (commentTimer.current) clearTimeout(commentTimer.current); }, []);
+
+            useEffect(() => {
+                if (data.comment === undefined) return;
+                if (data.comment === lastSavedComment.current) return;
+                if (comment !== lastSavedComment.current) return;
+                setComment(data.comment || '');
+                lastSavedComment.current = data.comment || '';
+            }, [data.comment]);
+
+            const noteTimer = useRef(null);
+            const lastSavedNote = useRef(data.campNote || '');
+
+            const saveNote = useCallback(async (value) => {
+                if (value === lastSavedNote.current) return;
+                setIsSavingNote(true);
+                try {
+                    const res = await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ campNote: value }),
+                        keepalive: true
+                    });
+                    if (res.ok) lastSavedNote.current = value;
+                    else if (res.status === 401) flagAuthExpired();
+                } catch(e) {
+                    console.error('Failed to save note', e);
+                } finally {
+                    setIsSavingNote(false);
+                }
+            }, [data.customName]);
+
+            const handleNoteChange = useCallback((e) => {
+                const val = e.target.value;
+                setCampNote(val);
+                if (noteTimer.current) clearTimeout(noteTimer.current);
+                noteTimer.current = setTimeout(() => saveNote(val), 800);
+            }, [saveNote]);
+
+            const handleNoteBlur = useCallback(() => {
+                if (noteTimer.current) clearTimeout(noteTimer.current);
+                saveNote(campNote);
+            }, [campNote, saveNote]);
+
+            useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); }, []);
+
+            useEffect(() => {
+                if (data.campNote === undefined) return;
+                if (data.campNote === lastSavedNote.current) return;
+                if (campNote !== lastSavedNote.current) return;
+                setCampNote(data.campNote || '');
+                lastSavedNote.current = data.campNote || '';
+            }, [data.campNote]);
+
+            // Flush pending (debounced) note/comment if this row unmounts or the tab closes/hides.
+            // saveNote/saveComment are no-ops when the value is unchanged, so a clean field costs nothing.
+            const campNoteRef = useRef(campNote); campNoteRef.current = campNote;
+            const commentRef = useRef(comment); commentRef.current = comment;
+            const saveNoteRef = useRef(saveNote); saveNoteRef.current = saveNote;
+            const saveCommentRef = useRef(saveComment); saveCommentRef.current = saveComment;
+            useEffect(() => {
+                const flush = () => { saveNoteRef.current(campNoteRef.current); saveCommentRef.current(commentRef.current); };
+                __dirtyFlushers.add(flush);
+                return () => { __dirtyFlushers.delete(flush); flush(); };
+            }, []);
+
+            useEffect(() => {
+                if (data.costAlertNote === undefined) return;
+                if (showAlertPopup) return;
+                setCostAlertNote(data.costAlertNote || '');
+            }, [data.costAlertNote, showAlertPopup]);
+
+            useEffect(() => {
+                if (data.costAlert === undefined) return;
+                setCostAlert(data.costAlert || 0);
+                if (!showAlertPopup) setAlertValue(data.costAlert || '');
+            }, [data.costAlert, showAlertPopup]);
+
+            const handleDelete = async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Удалить кампанию "${data.customName}"?`)) return;
+                setIsDeleting(true);
+                try {
+                    const res = await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        onRefresh();
+                    } else {
+                        alert('Ошибка удаления. Возможно, кампания уже удалена.');
+                        setIsDeleting(false);
+                    }
+                } catch(err) {
+                    alert('Ошибка сети при удалении');
+                    setIsDeleting(false);
+                }
+            };
+
+            const handleSaveEdit = async () => {
+                if (!editName.trim() || !editUrl.trim()) { alert('Заполните оба поля'); return; }
+                setIsSavingEdit(true);
+                try {
+                    const res = await fetch(`/api/traffic-buyer/${encodeURIComponent(data.customName)}/edit`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ newName: editName.trim(), newUrl: editUrl.trim(), newSiteUrl: editSiteUrl.trim() })
+                    });
+                    if (res.ok) { setShowEditModal(false); onRefresh(); }
+                    else { const err = await res.json().catch(() => ({})); alert(err.error || 'Ошибка сохранения'); }
+                } catch (e) { alert('Ошибка сети'); }
+                finally { setIsSavingEdit(false); }
+            };
+
+
+            const handleRefresh = async (e) => {
+                e.stopPropagation();
+                if (isRefreshing) return;
+                setIsRefreshing(true);
+                if (onRefresh) {
+                    await onRefresh(data.customName);
+                }
+                setIsRefreshing(false);
+            };
+
+            return (
+                <div
+                    data-camp-name={data.customName}
+                    className={`flex flex-col border-b transition-all duration-200 group ${
+                        isDragged ? 'opacity-20 scale-[0.98] grayscale' : ''
+                    } ${
+                        isDraggedOver ? 'border-t-2 border-t-purple-500 shadow-[0_-8px_15px_-5px_rgba(168,85,247,0.4)] bg-zinc-900/60 relative z-10' : 'border-zinc-800/50 hover:bg-zinc-900/30'
+                    }`}
+                    onMouseEnter={() => { if (onDragEnter) onDragEnter(index); }}
+                >
+                    <div className="flex items-center p-3 relative">
+                        {/* Drag Handle — mousedown triggers drag mode */}
+                        <div 
+                            className="w-6 h-8 flex-shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-200 transition-colors mr-1 select-none" 
+                            title="Перетащите для перемещения"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                if (onDragStart) onDragStart(index);
+                            }}
+                        >
+                            <i className="fas fa-grip-vertical text-[11px] pointer-events-none"></i>
+                        </div>
+                        {/* Expand/Collapse Chevron */}
+                        <div className="w-5 flex-shrink-0 flex items-center justify-center">
+                            {hasAnyExpand && (
+                                <button
+                                    onClick={() => setIsExpanded(!isExpanded)}
+                                    className="w-6 h-6 rounded flex items-center justify-center text-zinc-500 hover:text-white hover:bg-zinc-800 transition-colors"
+                                >
+                                    <i className={`fas fa-chevron-${isExpanded ? 'down' : 'right'} text-[10px]`}></i>
+                                </button>
+                            )}
+                        </div>
+
+                        {/* 1. Название */}
+                        <div className="flex-1 min-w-0 pr-4">
+                            <div className="flex items-center gap-3 mb-1">
+                                <h3 className="font-bold text-sm text-zinc-100 truncate">{data.customName}</h3>
+                                <div className="relative">
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setShowStatusPicker(!showStatusPicker); }}
+                                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition-opacity ${statusInfo.bg} ${statusInfo.color} ${statusInfo.border}`}
+                                    >
+                                        <i className={`fas ${statusInfo.icon} text-[8px]`}></i>
+                                        {statusInfo.label}
+                                        <i className="fas fa-caret-down text-[7px] ml-0.5 opacity-50"></i>
+                                    </button>
+                                    {showStatusPicker && (
+                                        <div className="absolute top-7 left-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 w-32">
+                                            {CUSTOM_STATUSES.map(s => (
+                                                <button key={s.key} onClick={(e) => { e.stopPropagation(); handleStatusChange(s.key); }}
+                                                    className={`w-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 hover:bg-zinc-800 transition-colors ${s.color} ${customStatus === s.key ? 'bg-zinc-800' : ''}`}>
+                                                    <i className={`fas ${s.icon} text-[8px]`}></i>
+                                                    {s.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                {data.url && (
+                                    <button 
+                                        onClick={(e) => {
+                                            copyToClipboard(data.url);
+                                            const icon = e.currentTarget.querySelector('i');
+                                            icon.className = 'fas fa-check text-green-400 text-[10px]';
+                                            setTimeout(() => icon.className = 'fas fa-link text-[10px]', 1500);
+                                        }}
+                                        className="text-zinc-500 hover:text-white transition-colors"
+                                        title="Скопировать ссылку на таблицу"
+                                    >
+                                        <i className="fas fa-link text-[10px]"></i>
+                                    </button>
+                                )}
+                                {/* move-to-admin removed: Traffic Buyer is an independent dashboard */}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 flex items-center gap-2 flex-wrap">
+                                <span title="Системное имя в Google Ads" className="truncate max-w-[200px] inline-block">{data.name}</span>
+                                {data.siteUrl && (
+                                    <React.Fragment>
+                                        <span>•</span>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                const url = data.siteUrl;
+                                                const fallback = () => {
+                                                    const ta = document.createElement('textarea');
+                                                    ta.value = url;
+                                                    ta.style.position = 'fixed';
+                                                    ta.style.left = '-9999px';
+                                                    document.body.appendChild(ta);
+                                                    ta.select();
+                                                    try { document.execCommand('copy'); } catch (_) {}
+                                                    document.body.removeChild(ta);
+                                                };
+                                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                                    navigator.clipboard.writeText(url).catch(fallback);
+                                                } else {
+                                                    fallback();
+                                                }
+                                                const btn = e.currentTarget;
+                                                const lbl = btn.querySelector('.copy-label');
+                                                if (lbl) {
+                                                    const prev = lbl.textContent;
+                                                    lbl.textContent = '✓ Скопировано';
+                                                    btn.classList.add('text-green-400');
+                                                    btn.classList.remove('text-purple-400');
+                                                    setTimeout(() => {
+                                                        lbl.textContent = prev;
+                                                        btn.classList.remove('text-green-400');
+                                                        btn.classList.add('text-purple-400');
+                                                    }, 1200);
+                                                }
+                                            }}
+                                            className="text-purple-400 hover:text-purple-300 transition-colors truncate max-w-[200px] inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0"
+                                            title={`Кликните, чтобы скопировать: ${data.siteUrl}`}
+                                        >
+                                            <i className="fas fa-globe text-[8px]"></i>
+                                            <span className="copy-label">{data.siteUrl.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</span>
+                                        </button>
+                                    </React.Fragment>
+                                )}
+                                <span>•</span>
+                                <span className="flex items-center gap-1">
+                                    <i className="fas fa-sync-alt text-[9px]"></i> {data.lastUpdated}
+                                </span>
+                                {data.addedAt && (
+                                    <React.Fragment>
+                                        <span>•</span>
+                                        <span className="flex items-center gap-1 text-zinc-600" title={`Создано: ${new Date(data.addedAt).toLocaleString('ru-RU')}`}>
+                                            <i className="fas fa-calendar-plus text-[8px]"></i>
+                                            {new Date(data.addedAt).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}, {new Date(data.addedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                    </React.Fragment>
+                                )}
+                                {data.isStale && (
+                                    <span className="flex items-center gap-1 text-yellow-400" title="⚠️ Таблица Google не обновлялась больше 3 часов. Проверьте, работает ли скрипт в Google Ads.">
+                                        <i className="fas fa-exclamation-triangle text-[10px]"></i>
+                                        <span className="text-[9px]">Таблица не обновилась</span>
+                                    </span>
+                                )}
+                                {data.impressionsStale && !data.isStale && (
+                                    <span className="flex items-center gap-1 text-orange-400" title="⚠️ Показы за сегодня не менялись больше 5 часов. Возможно, скрипт отключился или кампания остановлена.">
+                                        <i className="fas fa-exclamation-circle text-[10px]"></i>
+                                        <span className="text-[9px]">Показы не меняются</span>
+                                    </span>
+                                )}
+                                <button onClick={handleRefresh} className={`hover:text-purple-400 transition-colors opacity-0 group-hover:opacity-100 ml-1 ${isRefreshing ? 'animate-spin text-blue-400 opacity-100' : ''}`} title="Обновить данные">
+                                    <i className="fas fa-redo text-[9px]"></i>
+                                </button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditName(data.customName); setEditUrl(data.url || ''); setEditSiteUrl(data.siteUrl || ''); setShowEditModal(true); }} className="hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100 ml-2 text-zinc-600" title="Редактировать кампанию">
+                                    <i className="fas fa-edit text-[9px]"></i>
+                                </button>
+                                <button onClick={handleDelete} className={`hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 ml-1 text-zinc-600 ${isDeleting ? 'animate-pulse text-red-500 opacity-100' : ''}`} title="Удалить кампанию" disabled={isDeleting}>
+                                    <i className="fas fa-trash text-[9px]"></i>
+                                </button>
+                                
+                                <div className={`ml-4 flex items-center gap-1.5 transition-opacity ${comment ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 focus-within:opacity-100 relative`}>
+                                    <i className="fas fa-pen text-[8px] text-zinc-600"></i>
+                                    <input 
+                                        type="text" 
+                                        value={comment}
+                                        onChange={handleCommentChange}
+                                        onBlur={handleCommentBlur}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') e.target.blur();
+                                        }}
+                                        placeholder="Заметка..."
+                                        className="bg-transparent text-[10px] text-zinc-400 placeholder-zinc-700 outline-none w-40 focus:text-zinc-200 focus:border-b focus:border-zinc-700 border-b border-transparent pb-[1px] transition-colors"
+                                    />
+                                    {isSavingComment && <i className="fas fa-circle-notch fa-spin text-[8px] text-zinc-600 absolute -right-3"></i>}
+                                    {isSavingComment && <i className="fas fa-spinner fa-spin text-[8px] text-purple-400 absolute -right-3"></i>}
+                                </div>
+                                <div className={`ml-3 flex items-center gap-1.5 transition-opacity ${campNote ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 focus-within:opacity-100 relative`}>
+                                    <i className="fas fa-sticky-note text-[8px] text-orange-500"></i>
+                                    <input
+                                        type="text"
+                                        value={campNote}
+                                        onChange={handleNoteChange}
+                                        onBlur={handleNoteBlur}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') e.target.blur();
+                                        }}
+                                        placeholder="Заметка 2..."
+                                        className="bg-transparent text-[10px] text-orange-400 placeholder-orange-900 outline-none w-40 focus:text-orange-300 focus:border-b focus:border-orange-700 border-b border-transparent pb-[1px] transition-colors"
+                                    />
+                                    {isSavingNote && <i className="fas fa-spinner fa-spin text-[8px] text-orange-400 absolute -right-3"></i>}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 24h Timer donut */}
+                        <div className="flex-shrink-0 flex items-center pr-1">
+                            <button onClick={(e) => { e.stopPropagation(); handleToggleTimer(); }}
+                                className="w-5 h-5 flex items-center justify-center"
+                                title={timerActive ? `Осталось ${Math.max(0, Math.ceil((TIMER_DURATION - (Date.now() - campTimer)) / 3600000))}ч` : 'Запустить 24ч таймер'}>
+                                <svg width="16" height="16" viewBox="0 0 20 20">
+                                    <circle cx="10" cy="10" r="8" fill="none" stroke={timerActive ? '#3f3f46' : '#27272a'} strokeWidth="3" />
+                                    {timerActive && (
+                                        <circle cx="10" cy="10" r="8" fill="none" stroke="#a78bfa" strokeWidth="3"
+                                            strokeDasharray={`${timerProgress * 50.265} 50.265`}
+                                            strokeLinecap="round"
+                                            transform="rotate(-90 10 10)"
+                                            style={{ transition: 'stroke-dasharray 1s linear' }} />
+                                    )}
+                                </svg>
+                            </button>
+                        </div>
+
+                        {/* Task icon */}
+                        <div className="flex-shrink-0 flex items-center pr-2 relative">
+                            <button onClick={(e) => { e.stopPropagation(); setTaskInput(campTask); setShowTaskPopup(!showTaskPopup); }}
+                                className={`w-5 h-5 flex items-center justify-center rounded transition-colors ${campTask ? 'text-white' : 'text-zinc-700 hover:text-zinc-500'}`}
+                                title={campTask || 'Добавить задачу'}>
+                                <i className="fas fa-exclamation text-[13px]"></i>
+                            </button>
+                            {showTaskPopup && (
+                                <div className="absolute top-7 right-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl p-3 w-56" onClick={e => e.stopPropagation()}>
+                                    <textarea value={taskInput} onChange={e => setTaskInput(e.target.value)} rows={3} placeholder="Задача..."
+                                        className="w-full bg-zinc-800 border border-zinc-700 text-xs text-zinc-200 px-2 py-1.5 rounded resize-none focus:outline-none focus:border-purple-500 mb-2" autoFocus />
+                                    <div className="flex gap-2">
+                                        <button onClick={() => handleSaveTask(taskInput)}
+                                            className="flex-1 px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-500 text-white rounded font-bold">Да</button>
+                                        <button onClick={() => setShowTaskPopup(false)}
+                                            className="flex-1 px-2 py-1 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded font-bold">Нет</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Stats: Today */}
+                        <div className="w-56 flex-shrink-0 border-l border-zinc-800 pl-4">
+                            <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Сегодня</div>
+                            <div className="flex gap-3 text-xs">
+                                <span className="text-blue-400" title="Показы"><i className="far fa-eye mr-1"></i>{formatNumber(data.stats.today.impressions)}</span>
+                                <span className="text-purple-400" title="Клики"><i className="fas fa-mouse-pointer mr-1"></i>{formatNumber(data.stats.today.clicks)}</span>
+                                <span className="text-red-400" title="Затраты"><i className="fas fa-dollar-sign mr-1"></i>{data.stats.today.cost.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        {/* Stats: All Time */}
+                        <div className="w-56 flex-shrink-0 border-l border-zinc-800 pl-4">
+                            <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1 flex items-center gap-2">
+                                Все время
+                                <div className="relative">
+                                    <button onClick={(e) => { e.stopPropagation(); setShowAlertPopup(!showAlertPopup); }}
+                                        className={`transition-colors ${costAlert > 0 ? 'text-yellow-400 animate-pulse' : 'text-zinc-600 hover:text-zinc-400'}`}
+                                        title={costAlert > 0 ? `Будильник: $${costAlert}` : 'Настроить уведомление'}>
+                                        <i className="fas fa-bell text-[10px]"></i>
+                                    </button>
+                                    {showAlertPopup && (
+                                        <div className="absolute top-6 right-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl p-3 w-52" onClick={e => e.stopPropagation()}>
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-yellow-500 font-bold text-sm">$</span>
+                                                <span className="text-zinc-500 text-xs">≥</span>
+                                                <input type="number" value={alertValue} onChange={e => setAlertValue(e.target.value)}
+                                                    placeholder="0.00" step="0.01" min="0"
+                                                    className="flex-1 bg-zinc-800 border border-zinc-700 text-xs text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-yellow-500 transition-colors w-20" />
+                                            </div>
+                                            <input type="text" value={costAlertNote} onChange={e => setCostAlertNote(e.target.value)}
+                                                maxLength={200}
+                                                className="w-full bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-yellow-500 transition-colors mb-2" />
+                                            <div className="flex gap-2">
+                                                <button onClick={handleSaveAlert}
+                                                    className="flex-1 px-2 py-1 text-[10px] bg-yellow-600 hover:bg-yellow-500 text-white rounded font-bold transition-colors">
+                                                    Сохранить
+                                                </button>
+                                                <button onClick={handleDisableAlert}
+                                                    className="flex-1 px-2 py-1 text-[10px] bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded font-bold transition-colors">
+                                                    Отключить
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex gap-3 text-xs">
+                                <span className="text-zinc-300" title="Показы"><i className="far fa-eye mr-1"></i>{formatNumber(data.stats.allTime.impressions)}</span>
+                                <span className="text-purple-500" title="Клики"><i className="fas fa-mouse-pointer mr-1"></i>{formatNumber(data.stats.allTime.clicks)}</span>
+                                <span className="text-yellow-600" title="Затраты"><i className="fas fa-dollar-sign mr-1"></i>{data.stats.allTime.cost.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* EXPANDED CONTENT — Tabbed: Queries / Keywords / Ad Texts */}
+                    <div className={`accordion-content ${isExpanded ? 'expanded' : ''} bg-[#0c0c0e] border-t border-zinc-800/50`}>
+                        <div className="p-4 pl-11">
+                            {/* Tab bar */}
+                            <div className="flex gap-4 mb-3 border-b border-zinc-800 pb-2">
+                                {hasQueries && (
+                                    <button onClick={() => setActiveTab('queries')}
+                                        className={`text-[10px] uppercase tracking-widest font-bold pb-1 transition-colors border-b-2 ${activeTab === 'queries' ? 'border-purple-500 text-zinc-200' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                                        Поисковые запросы
+                                    </button>
+                                )}
+                                {hasKeywords && (
+                                    <button onClick={() => setActiveTab('keywords')}
+                                        className={`text-[10px] uppercase tracking-widest font-bold pb-1 transition-colors border-b-2 ${activeTab === 'keywords' ? 'border-purple-500 text-zinc-200' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                                        Ключевые слова
+                                    </button>
+                                )}
+                                {hasAdTexts && (
+                                    <button onClick={() => setActiveTab('adTexts')}
+                                        className={`text-[10px] uppercase tracking-widest font-bold pb-1 transition-colors border-b-2 ${activeTab === 'adTexts' ? 'border-purple-500 text-zinc-200' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>
+                                        Заголовки
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Tab: Queries */}
+                            {activeTab === 'queries' && hasQueries && (
+                                <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
+                                    <table className="w-full text-left border-collapse queries-table">
+                                        <thead>
+                                            <tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+                                                <th className="p-2 font-normal">Поисковый запрос</th>
+                                                <th className="p-2 font-normal w-24 text-right">Показы</th>
+                                                <th className="p-2 font-normal w-24 text-right">Клики</th>
+                                                <th className="p-2 font-normal w-24 text-right">CPC</th>
+                                                <th className="p-2 font-normal w-24 text-right">Затраты</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-xs text-zinc-300">
+                                            {data.queries.map((q, idx) => {
+                                                const cpc = q.clicks > 0 ? (q.cost / q.clicks).toFixed(2) : "0.00";
+                                                return (
+                                                    <tr key={q.id} className={`hover:bg-zinc-800/50 transition-colors ${idx !== data.queries.length - 1 ? 'border-b border-zinc-800/50' : ''}`}>
+                                                        <td className="p-2 font-mono text-zinc-200">"{q.text}"</td>
+                                                        <td className="p-2 text-right text-blue-400">{q.impressions}</td>
+                                                        <td className="p-2 text-right text-purple-400">{q.clicks}</td>
+                                                        <td className="p-2 text-right text-zinc-400">${cpc}</td>
+                                                        <td className="p-2 text-right text-red-400 font-mono">${q.cost.toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {/* Tab: Keywords */}
+                            {activeTab === 'keywords' && hasKeywords && (
+                                <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
+                                    <table className="w-full text-left border-collapse queries-table">
+                                        <thead>
+                                            <tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+                                                <th className="p-2 font-normal">Ключевое слово</th>
+                                                <th className="p-2 font-normal w-20 text-right">Статус</th>
+                                                <th className="p-2 font-normal w-32">Группа</th>
+                                                <th className="p-2 font-normal w-20 text-right">Показы</th>
+                                                <th className="p-2 font-normal w-20 text-right">Клики</th>
+                                                <th className="p-2 font-normal w-20 text-right">CPC</th>
+                                                <th className="p-2 font-normal w-24 text-right">Затраты</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-xs text-zinc-300">
+                                            {data.keywords.map((kw, idx) => {
+                                                const cpc = kw.clicks > 0 ? (kw.cost / kw.clicks).toFixed(2) : "0.00";
+                                                const isPrimary = !!primaryKeyword && (primaryKeyword || '').trim().toLowerCase() === (kw.text || '').trim().toLowerCase();
+                                                const rowClass = isPrimary
+                                                    ? 'bg-yellow-500/10 hover:bg-yellow-500/20 transition-colors ring-1 ring-yellow-500/40 cursor-pointer select-none'
+                                                    : 'hover:bg-zinc-800/50 transition-colors cursor-pointer select-none';
+                                                return (
+                                                    <tr key={kw.id}
+                                                        onDoubleClick={() => handlePrimaryKeywordToggle(kw.text)}
+                                                        title={isPrimary ? 'Двойной клик — снять отметку «рабочий ключ»' : 'Двойной клик — отметить как рабочий ключ'}
+                                                        className={`${rowClass} ${idx !== data.keywords.length - 1 ? 'border-b border-zinc-800/50' : ''}`}>
+                                                        <td className={`p-2 font-mono ${isPrimary ? 'text-yellow-300 font-semibold' : 'text-zinc-200'}`}>{kw.text}</td>
+                                                        <td className="p-2 text-right"><span className={`text-[9px] font-bold uppercase ${kw.status === 'ENABLED' ? 'text-green-400' : 'text-zinc-500'}`}>{kw.status === 'ENABLED' ? 'Акт.' : kw.status}</span></td>
+                                                        <td className="p-2 text-zinc-500 truncate max-w-[150px]">{kw.adGroup}</td>
+                                                        <td className="p-2 text-right text-blue-400">{kw.impressions}</td>
+                                                        <td className="p-2 text-right text-purple-400">{kw.clicks}</td>
+                                                        <td className="p-2 text-right text-zinc-400">${cpc}</td>
+                                                        <td className="p-2 text-right text-red-400 font-mono">${kw.cost.toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {/* Tab: Ad Texts */}
+                            {activeTab === 'adTexts' && hasAdTexts && (
+                                <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
+                                    <table className="w-full text-left border-collapse queries-table">
+                                        <thead>
+                                            <tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+                                                <th className="p-2 font-normal w-16">Тип</th>
+                                                <th className="p-2 font-normal">Заголовки</th>
+                                                <th className="p-2 font-normal">Описания</th>
+                                                <th className="p-2 font-normal w-20 text-right">Показы</th>
+                                                <th className="p-2 font-normal w-20 text-right">Клики</th>
+                                                <th className="p-2 font-normal w-24 text-right">Затраты</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-xs text-zinc-300">
+                                            {data.adTexts.map((ad, idx) => (
+                                                <tr key={ad.id} className={`hover:bg-zinc-800/50 transition-colors ${idx !== data.adTexts.length - 1 ? 'border-b border-zinc-800/50' : ''}`}>
+                                                    <td className="p-2"><span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${ad.type === 'RSA' ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-700 text-zinc-400'}`}>{ad.type}</span></td>
+                                                    <td className="p-2 text-zinc-200 text-[10px]">{ad.headlines}</td>
+                                                    <td className="p-2 text-zinc-400 text-[10px]">{ad.descriptions}</td>
+                                                    <td className="p-2 text-right text-blue-400">{ad.impressions}</td>
+                                                    <td className="p-2 text-right text-purple-400">{ad.clicks}</td>
+                                                    <td className="p-2 text-right text-red-400 font-mono">${ad.cost.toFixed(2)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {!hasAnyExpand && (
+                                <div className="text-xs text-zinc-600 italic">Данные по запросам отсутствуют или кампания не поисковая.</div>
+                            )}
+                        </div>
+                    </div>
+
+                    {showEditModal && (
+                        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm" onClick={() => setShowEditModal(false)}>
+                            <div className="bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl w-96 p-5" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center gap-2 mb-4">
+                                    <i className="fas fa-edit text-blue-400"></i>
+                                    <h3 className="text-sm font-bold text-zinc-200">Редактирование кампании</h3>
+                                </div>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Название</label>
+                                        <input type="text" value={editName} onChange={e => setEditName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-2.5 rounded-lg focus:outline-none focus:border-blue-500 transition-colors" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Ссылка на Google Таблицу</label>
+                                        <input type="url" value={editUrl} onChange={e => setEditUrl(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-2.5 rounded-lg focus:outline-none focus:border-blue-500 transition-colors" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Сайт</label>
+                                        <input type="url" value={editSiteUrl} onChange={e => setEditSiteUrl(e.target.value)} placeholder="https://example.com" className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-2.5 rounded-lg focus:outline-none focus:border-blue-500 transition-colors" />
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-2 mt-5">
+                                    <button onClick={() => setShowEditModal(false)} className="px-4 py-2 text-xs text-zinc-400 hover:text-white transition-colors">Отмена</button>
+                                    <button onClick={handleSaveEdit} disabled={isSavingEdit} className="px-4 py-2 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center gap-2">
+                                        {isSavingEdit ? <i className="fas fa-circle-notch fa-spin"></i> : <i className="fas fa-save"></i>}
+                                        Сохранить
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const GOOGLE_ADS_SCRIPT = `function main() {
+  var account = AdsApp.currentAccount();
+  var accountName = account.getName();
+  var accountId = account.getCustomerId();
+
+  // 1. Создаем таблицу (или открываем ту, что создали вчера/ранее)
+  var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
+
+  // 2. Собираем показы и затраты (Общие и за Сегодня)
+  exportCampaignStats(spreadsheet);
+
+  // 3. Собираем реальные поисковые запросы за сегодня
+  exportSearchTermsToday(spreadsheet);
+
+  // 4. Записываем время последнего обновления
+  var metaSheet = getOrCreateSheet(spreadsheet, 'Метаданные');
+  metaSheet.clear();
+  metaSheet.appendRow(['Ключ', 'Значение']);
+  metaSheet.appendRow(['Последнее обновление', new Date().toISOString()]);
+
+  Logger.log('Готово! Ссылка на таблицу: ' + spreadsheet.getUrl());
+}
+
+// Функция для выгрузки статистики кампаний (Показы и Затраты)
+function exportCampaignStats(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
+  sheet.clear();
+  sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+
+  // А) Запрашиваем данные за СЕГОДНЯ
+  var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros " +
+                   "FROM campaign WHERE segments.date DURING TODAY";
+  var rowsToday = AdsApp.search(queryToday);
+  while (rowsToday.hasNext()) {
+    var row = rowsToday.next();
+    // Делим costMicros на 1 000 000, чтобы получить нормальную валюту
+    sheet.appendRow([row.campaign.name, row.campaign.status, 'Сегодня', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
+  }
+
+  // Б) Запрашиваем ОБЩИЕ данные (за всё время работы кампаний)
+  var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros " +
+                   "FROM campaign";
+  var rowsTotal = AdsApp.search(queryTotal);
+  while (rowsTotal.hasNext()) {
+    var row = rowsTotal.next();
+    sheet.appendRow([row.campaign.name, row.campaign.status, 'Все время', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
+  }
+}
+
+// Функция для выгрузки Поисковых запросов за сегодня
+function exportSearchTermsToday(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Поисковые_запросы_Сегодня');
+  sheet.clear();
+  sheet.appendRow(['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+
+  // Запрашиваем фразы только за СЕГОДНЯ и сортируем по количеству показов
+  var query = "SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros " +
+              "FROM search_term_view " +
+              "WHERE segments.date DURING TODAY " +
+              "ORDER BY metrics.impressions DESC";
+
+  var rows = AdsApp.search(query);
+  while (rows.hasNext()) {
+    var row = rows.next();
+    sheet.appendRow([
+      row.searchTermView.searchTerm,
+      row.campaign.name,
+      row.adGroup.name,
+      row.metrics.impressions,
+      row.metrics.clicks,
+      row.metrics.costMicros / 1000000
+    ]);
+  }
+}
+
+// Вспомогательная функция: создает лист, если его нет
+function getOrCreateSheet(spreadsheet, sheetName) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
+  }
+  return sheet;
+}
+
+// Вспомогательная функция: создает публичную таблицу
+function getOrCreateSpreadsheet(accountName, accountId) {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty('MY_NEW_STATS_SHEET');
+
+  if (sheetId) {
+    try {
+      return SpreadsheetApp.openById(sheetId);
+    } catch (e) {
+      Logger.log('Не удалось открыть старую таблицу, создаем новую.');
+    }
+  }
+
+  var spreadsheet = SpreadsheetApp.create('Статистика Показов и Запросов - ' + accountName);
+  sheetId = spreadsheet.getId();
+  props.setProperty('MY_NEW_STATS_SHEET', sheetId);
+  DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return spreadsheet;
+}`;
+
+        // --- MAIN APP ---
+        const GOOGLE_ADS_SCRIPT_X2 = `function main() {
+  var account = AdsApp.currentAccount();
+  var accountId = account.getCustomerId();
+  var accountName = account.getName();
+  var currency = account.getCurrencyCode();
+
+  Logger.log('=== НАЧАЛО СКРИПТА ===');
+  Logger.log('Валюта кабинета: ' + currency);
+  Logger.log('ID кабинета: ' + accountId);
+  Logger.log('Название: ' + accountName);
+  
+  // 1. Получаем или создаем единую таблицу
+  var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
+
+  // 2. БЛОК СТОРОННЕГО СЕРВИСА (Листы Info и Ads)
+  Logger.log('--- Запуск сбора данных для стороннего сервиса ---');
+  runThirdPartyService(spreadsheet, accountId, accountName, currency);
+
+  // 3. БЛОК ВАШЕГО ДАШБОРДА (Статистика кампаний и Поисковые запросы)
+  Logger.log('--- Запуск сбора данных для личного дашборда ---');
+  exportCampaignStats(spreadsheet);
+  exportSearchTermsToday(spreadsheet);
+
+  // 4. Очистка стандартных пустых листов (если есть)
+  var sheets = spreadsheet.getSheets();
+  for (var j = 0; j < sheets.length; j++) {
+    var name = sheets[j].getName();
+    if ((name === 'Sheet1' || name === 'Лист1') && sheets.length > 2) {
+      spreadsheet.deleteSheet(sheets[j]);
+      break;
+    }
+  }
+
+  Logger.log('Единая таблица готова: ' + spreadsheet.getUrl());
+  Logger.log('=== ЗАВЕРШЕНИЕ СКРИПТА ===');
+}
+
+// =======================================================
+// ЧАСТЬ 1: СТОРОННИЙ СЕРВИС (Объявления и Инфо)
+// =======================================================
+function runThirdPartyService(spreadsheet, accountId, accountName, currency) {
+  var now = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
+  var today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+  var yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), 'UTC', 'yyyy-MM-dd');
+
+  var infoSheet = getOrCreateSheet(spreadsheet, 'Info');
+  infoSheet.clear();
+  infoSheet.appendRow(['account_id', 'account_name', 'currency', 'updated_at', 'script_run_at']);
+  infoSheet.appendRow([accountId, accountName, currency, now, now]);
+
+  var adsSheet = getOrCreateSheet(spreadsheet, 'Ads');
+  adsSheet.clear();
+  adsSheet.appendRow([
+    'campaign_name', 'ad_group_name', 'ad_headline', 'ad_type', 'ad_id',
+    'status', 'cost', 'currency', 'clicks', 'impressions', 'conversions', 'avg_cpc', 'date', 'period'
+  ]);
+
+  var periods = [
+    { label: 'today', apiLabel: 'TODAY', date: today },
+    { label: 'yesterday', apiLabel: 'YESTERDAY', date: yesterday },
+    { label: 'last_7_days', apiLabel: 'LAST_7_DAYS', date: today },
+    { label: 'last_14_days', apiLabel: 'LAST_14_DAYS', date: today },
+    { label: 'last_30_days', apiLabel: 'LAST_30_DAYS', date: today },
+    { label: 'this_month', apiLabel: 'THIS_MONTH', date: today },
+    { label: 'last_month', apiLabel: 'LAST_MONTH', date: today },
+    { label: 'this_week_mon_today', apiLabel: 'THIS_WEEK_MON_TODAY', date: today },
+    { label: 'last_week_sun_sat', apiLabel: 'LAST_WEEK_SUN_SAT', date: today },
+    { label: 'last_business_week', apiLabel: 'LAST_BUSINESS_WEEK', date: today }
+  ];
+
+  var existingData = new Set();
+  var totalAdded = 0;
+  for (var i = 0; i < periods.length; i++) {
+    var added = addDataForPeriod(periods[i], adsSheet, existingData, currency);
+    totalAdded += added;
+  }
+}
+
+function addDataForPeriod(periodConfig, adsSheet, existingData, currency) {
+  var apiLabel = periodConfig.apiLabel;
+  var period = periodConfig.label;
+  var dateStr = periodConfig.date;
+  var adIterator = AdsApp.ads().forDateRange(apiLabel).get();
+  var added = 0;
+
+  while (adIterator.hasNext()) {
+    var ad = adIterator.next();
+    var adType = getAdType(ad);
+    var headline = getAdHeadline(ad);
+    var adId = getAdId(ad);
+    var stats = ad.getStatsFor(apiLabel);
+    var campaignName = ad.getCampaign().getName();
+    var adGroupName = ad.getAdGroup().getName();
+    var status = ad.isEnabled() ? 'enabled' : 'paused';
+    
+    var key = dateStr + '|' + period + '|' + campaignName + '|' + adGroupName + '|' + adId;
+    
+    if (!existingData.has(key)) {
+      adsSheet.appendRow([
+        campaignName, adGroupName, headline, adType, adId, status,
+        stats.getCost(), currency, stats.getClicks(), stats.getImpressions(),
+        stats.getConversions(), stats.getAverageCpc(), dateStr, period
+      ]);
+      existingData.add(key);
+      added++;
+    }
+  }
+  return added;
+}
+
+function getAdId(ad) {
+  try {
+    var fullId = ad.getId().toString();
+    var parts = fullId.split('/');
+    return parts.length > 1 ? parts[parts.length - 1] : fullId;
+  } catch (e) { return ''; }
+}
+
+function getAdType(ad) {
+  if (ad.isType().responsiveSearchAd()) return 'RSA';
+  if (ad.isType().expandedTextAd()) return 'ETA';
+  if (ad.isType().imageAd()) return 'IMAGE';
+  if (ad.isType().videoAd()) return 'VIDEO';
+  return 'OTHER';
+}
+
+function getAdHeadline(ad) {
+  if (ad.isType().responsiveSearchAd()) {
+    var headlines = ad.asType().responsiveSearchAd().getHeadlines();
+    if (headlines && headlines.length > 0) {
+      var allHeadlines = [];
+      for (var i = 0; i < Math.min(headlines.length, 5); i++) {
+        if (headlines[i].text) allHeadlines.push(headlines[i].text);
+      }
+      return allHeadlines.join(' | ') || '';
+    }
+  }
+  try { return ad.getHeadline() || ''; } catch (e) { return ''; }
+}
+
+// =======================================================
+// ЧАСТЬ 2: ЛИЧНЫЙ ДАШБОРД (Кампании и Запросы)
+// =======================================================
+function exportCampaignStats(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
+  sheet.clear();
+  sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+
+  // Сегодня
+  var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign WHERE segments.date DURING TODAY";
+  var rowsToday = AdsApp.search(queryToday);
+  while (rowsToday.hasNext()) {
+    var row = rowsToday.next();
+    
+    var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
+    var campaignStatus = (row.campaign && row.campaign.status) ? row.campaign.status : "UNKNOWN";
+    var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
+    var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
+    
+    var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
+    
+    sheet.appendRow([campaignName, campaignStatus, 'Сегодня', impressions, clicks, cost]);
+  }
+
+  // Все время
+  var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign";
+  var rowsTotal = AdsApp.search(queryTotal);
+  while (rowsTotal.hasNext()) {
+    var row = rowsTotal.next();
+    
+    var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
+    var campaignStatus = (row.campaign && row.campaign.status) ? row.campaign.status : "UNKNOWN";
+    var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
+    var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
+    var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
+    
+    sheet.appendRow([campaignName, campaignStatus, 'Все время', impressions, clicks, cost]);
+  }
+}
+
+function exportSearchTermsToday(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Поисковые_запросы_Сегодня');
+  sheet.clear();
+  sheet.appendRow(['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+
+  var query = "SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros " +
+              "FROM search_term_view WHERE segments.date DURING TODAY ORDER BY metrics.impressions DESC";
+
+  var rows = AdsApp.search(query);
+  while (rows.hasNext()) {
+    var row = rows.next();
+    
+    var searchTerm = (row.searchTermView && row.searchTermView.searchTerm) ? row.searchTermView.searchTerm : "Скрыто Google";
+    var campaignName = (row.campaign && row.campaign.name) ? row.campaign.name : "Неизвестная_кампания";
+    var adGroupName = (row.adGroup && row.adGroup.name) ? row.adGroup.name : "Неизвестная_группа";
+    
+    var impressions = (row.metrics && row.metrics.impressions) ? row.metrics.impressions : 0;
+    var clicks = (row.metrics && row.metrics.clicks) ? row.metrics.clicks : 0;
+    var cost = (row.metrics && row.metrics.costMicros) ? row.metrics.costMicros / 1000000 : 0;
+    
+    sheet.appendRow([
+      searchTerm,
+      campaignName,
+      adGroupName,
+      impressions,
+      clicks,
+      cost
+    ]);
+  }
+}
+
+// =======================================================
+// ОБЩИЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// =======================================================
+function getOrCreateSheet(spreadsheet, sheetName) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
+  }
+  return sheet;
+}
+
+function getOrCreateSpreadsheet(accountName, accountId) {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty('SHEET_ID');
+
+  if (sheetId) {
+    try {
+      var existing = SpreadsheetApp.openById(sheetId);
+      DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      return existing;
+    } catch (e) {
+      Logger.log('Не удалось открыть таблицу, создаём новую');
+    }
+  }
+
+  var spreadsheet = SpreadsheetApp.create('Google Ads Data - ' + accountName + ' (' + accountId + ')');
+  sheetId = spreadsheet.getId();
+  props.setProperty('SHEET_ID', sheetId);
+
+  DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  
+  return spreadsheet;
+}
+`;
+
+        const GOOGLE_ADS_SCRIPT_NEW = `function main() {
+  var account = AdsApp.currentAccount();
+  var accountId = account.getCustomerId();
+  var accountName = account.getName();
+  var currency = account.getCurrencyCode();
+
+  Logger.log('=== НАЧАЛО СКРИПТА (NEW) ===');
+  Logger.log('Валюта кабинета: ' + currency);
+  Logger.log('ID кабинета: ' + accountId);
+  Logger.log('Название: ' + accountName);
+
+  var spreadsheet = getOrCreateSpreadsheet(accountName, accountId);
+
+  Logger.log('--- Сбор ключевых слов ---');
+  exportActiveKeywords(spreadsheet);
+  Logger.log('--- Сбор текстов объявлений ---');
+  exportAdTextsAndStats(spreadsheet);
+  Logger.log('--- Сбор данных для стороннего сервиса ---');
+  runThirdPartyService(spreadsheet, accountId, accountName, currency);
+  Logger.log('--- Сбор статистики кампаний ---');
+  exportCampaignStats(spreadsheet);
+  Logger.log('--- Сбор поисковых запросов ---');
+  exportSearchTermsToday(spreadsheet);
+
+  var sheets = spreadsheet.getSheets();
+  for (var j = 0; j < sheets.length; j++) {
+    var name = sheets[j].getName();
+    if ((name === 'Sheet1' || name === 'Лист1') && sheets.length > 2) {
+      try { spreadsheet.deleteSheet(sheets[j]); } catch(e) {}
+      break;
+    }
+  }
+
+  Logger.log('Единая таблица готова: ' + spreadsheet.getUrl());
+  Logger.log('=== ЗАВЕРШЕНИЕ СКРИПТА (NEW) ===');
+}
+
+function exportActiveKeywords(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Рабочие_Ключи');
+  sheet.clear();
+  sheet.appendRow(['Ключевое слово', 'Статус', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+
+  var keywords = AdsApp.keywords().withCondition("CampaignStatus = ENABLED").get();
+  while (keywords.hasNext()) {
+    var kw = keywords.next();
+    var stats = kw.getStatsFor("ALL_TIME");
+    sheet.appendRow([
+      kw.getText(),
+      kw.isEnabled() ? 'ENABLED' : 'PAUSED',
+      kw.getCampaign().getName(),
+      kw.getAdGroup().getName(),
+      stats.getImpressions(),
+      stats.getClicks(),
+      stats.getCost()
+    ]);
+  }
+}
+
+function exportAdTextsAndStats(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Тексты_Объявлений');
+  sheet.clear();
+  sheet.appendRow(['Кампания', 'Группа объявлений', 'Тип', 'Заголовки', 'Описания', 'Показы', 'Клики', 'Затраты']);
+  var adIterator = AdsApp.ads().withCondition("Status = ENABLED").forDateRange("ALL_TIME").get();
+  while (adIterator.hasNext()) {
+    var ad = adIterator.next();
+    var stats = ad.getStatsFor("ALL_TIME");
+    if (stats.getImpressions() > 0) {
+      sheet.appendRow([
+        ad.getCampaign().getName(),
+        ad.getAdGroup().getName(),
+        getAdType(ad),
+        getAdHeadline(ad),
+        getAdDescription(ad),
+        stats.getImpressions(),
+        stats.getClicks(),
+        stats.getCost()
+      ]);
+    }
+  }
+}
+
+function runThirdPartyService(spreadsheet, accountId, accountName, currency) {
+  var now = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
+  var today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+  var yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), 'UTC', 'yyyy-MM-dd');
+  var infoSheet = getOrCreateSheet(spreadsheet, 'Info');
+  infoSheet.clear();
+  infoSheet.appendRow(['account_id', 'account_name', 'currency', 'updated_at', 'script_run_at']);
+  infoSheet.appendRow([accountId, accountName, currency, now, now]);
+  var adsSheet = getOrCreateSheet(spreadsheet, 'Ads');
+  adsSheet.clear();
+  adsSheet.appendRow(['campaign_name', 'ad_group_name', 'ad_headline', 'ad_type', 'ad_id', 'status', 'cost', 'currency', 'clicks', 'impressions', 'conversions', 'avg_cpc', 'date', 'period']);
+  var periods = [
+    { label: 'today', apiLabel: 'TODAY', date: today },
+    { label: 'yesterday', apiLabel: 'YESTERDAY', date: yesterday },
+    { label: 'last_30_days', apiLabel: 'LAST_30_DAYS', date: today }
+  ];
+  var existingData = new Set();
+  for (var i = 0; i < periods.length; i++) {
+    addDataForPeriod(periods[i], adsSheet, existingData, currency);
+  }
+}
+
+function addDataForPeriod(periodConfig, adsSheet, existingData, currency) {
+  var adIterator = AdsApp.ads().forDateRange(periodConfig.apiLabel).get();
+  while (adIterator.hasNext()) {
+    var ad = adIterator.next();
+    var stats = ad.getStatsFor(periodConfig.apiLabel);
+    var adId = getAdId(ad);
+    var key = periodConfig.date + '|' + periodConfig.label + '|' + ad.getCampaign().getName() + '|' + ad.getAdGroup().getName() + '|' + adId;
+    if (!existingData.has(key)) {
+      adsSheet.appendRow([
+        ad.getCampaign().getName(),
+        ad.getAdGroup().getName(),
+        getAdHeadline(ad),
+        getAdType(ad),
+        adId,
+        ad.isEnabled() ? 'enabled' : 'paused',
+        stats.getCost(),
+        currency,
+        stats.getClicks(),
+        stats.getImpressions(),
+        stats.getConversions(),
+        stats.getAverageCpc(),
+        periodConfig.date,
+        periodConfig.label
+      ]);
+      existingData.add(key);
+    }
+  }
+}
+
+function getAdId(ad) {
+  try { return ad.getId().toString().split('/').pop(); } catch (e) { return ''; }
+}
+
+function getAdType(ad) {
+  if (ad.isType().responsiveSearchAd()) return 'RSA';
+  if (ad.isType().expandedTextAd()) return 'ETA';
+  return 'OTHER';
+}
+
+function getAdHeadline(ad) {
+  if (ad.isType().responsiveSearchAd()) {
+    var hl = ad.asType().responsiveSearchAd().getHeadlines();
+    return (hl && hl.length > 0) ? hl.map(function(h) { return h.text; }).join(' | ') : '';
+  }
+  try { return ad.getHeadline() || ''; } catch (e) { return ''; }
+}
+
+function getAdDescription(ad) {
+  if (ad.isType().responsiveSearchAd()) {
+    var ds = ad.asType().responsiveSearchAd().getDescriptions();
+    return (ds && ds.length > 0) ? ds.map(function(d) { return d.text; }).join(' | ') : '';
+  }
+  try { return ad.getDescription1() || ''; } catch (e) { return ''; }
+}
+
+function exportCampaignStats(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
+  sheet.clear();
+  sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+
+  var queryToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign WHERE segments.date DURING TODAY";
+  var rowsToday = AdsApp.search(queryToday);
+  while (rowsToday.hasNext()) {
+    var row = rowsToday.next();
+    sheet.appendRow([row.campaign.name, row.campaign.status, 'Сегодня', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
+  }
+
+  var queryTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign";
+  var rowsTotal = AdsApp.search(queryTotal);
+  while (rowsTotal.hasNext()) {
+    var row = rowsTotal.next();
+    sheet.appendRow([row.campaign.name, row.campaign.status, 'Все время', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
+  }
+}
+
+function exportSearchTermsToday(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Поисковые_запросы_Сегодня');
+  sheet.clear();
+  sheet.appendRow(['Поисковый запрос', 'Кампания', 'Группа объявлений', 'Показы', 'Клики', 'Затраты']);
+  var query = "SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros FROM search_term_view WHERE segments.date DURING TODAY";
+  var rows = AdsApp.search(query);
+  while (rows.hasNext()) {
+    var row = rows.next();
+    sheet.appendRow([row.searchTermView.searchTerm, row.campaign.name, row.adGroup.name, row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]);
+  }
+}
+
+function getOrCreateSheet(spreadsheet, sheetName) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) { sheet = spreadsheet.insertSheet(sheetName); }
+  return sheet;
+}
+
+function getOrCreateSpreadsheet(accountName, accountId) {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty('SHEET_ID');
+
+  if (sheetId) {
+    var existing = tryOpenSpreadsheet(sheetId, props);
+    if (existing) {
+      ensureSharing(sheetId, props);
+      return existing;
+    }
+  }
+
+  Logger.log('Создаём новую таблицу для ' + accountName + ' (' + accountId + ')');
+  var spreadsheet = SpreadsheetApp.create('Google Ads Data - ' + accountName + ' (' + accountId + ')');
+  var newSheetId = spreadsheet.getId();
+  props.setProperty('SHEET_ID', newSheetId);
+  props.deleteProperty('SHARING_DONE');
+  ensureSharing(newSheetId, props);
+  return spreadsheet;
+}
+
+function tryOpenSpreadsheet(sheetId, props) {
+  var maxAttempts = 3;
+  var lastError = null;
+
+  for (var i = 0; i < maxAttempts; i++) {
+    try {
+      return SpreadsheetApp.openById(sheetId);
+    } catch (e) {
+      lastError = e;
+      var msg = (e.message || '').toLowerCase();
+
+      if (msg.indexOf('not found') !== -1 ||
+          msg.indexOf('invalid') !== -1 ||
+          msg.indexOf('does not exist') !== -1 ||
+          msg.indexOf('unable to find') !== -1) {
+        Logger.log('Таблица ' + sheetId + ' реально удалена: ' + e.message);
+        props.deleteProperty('SHEET_ID');
+        props.deleteProperty('SHARING_DONE');
+        return null;
+      }
+
+      Logger.log('Попытка ' + (i + 1) + '/' + maxAttempts + ' открыть таблицу упала (временная ошибка): ' + e.message);
+      if (i < maxAttempts - 1) {
+        Utilities.sleep(2000 * (i + 1));
+      }
+    }
+  }
+
+  Logger.log('Все ' + maxAttempts + ' попыток открыть таблицу упали. SHEET_ID сохранён, пропускаем запуск. Последняя ошибка: ' + lastError.message);
+  throw new Error('Временная ошибка Google API при открытии таблицы. SHEET_ID сохранён, следующий запуск повторит попытку.');
+}
+
+function ensureSharing(sheetId, props) {
+  if (props.getProperty('SHARING_DONE') === 'true') return;
+  try {
+    DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    props.setProperty('SHARING_DONE', 'true');
+    Logger.log('Sharing настроен для таблицы ' + sheetId);
+  } catch (e) {
+    Logger.log('Не удалось настроить sharing (не критично, повторим в следующий раз): ' + e.message);
+  }
+}`;
+
+        const App = () => {
+            const { useState, useEffect, useRef } = React;
+
+            const [role, setRole] = useState(null);
+            useEffect(() => {
+                fetch('/api/me').then(r => r.ok ? r.json() : null).then(d => setRole(d && d.role)).catch(() => {});
+            }, []);
+            const handleLogout = async () => {
+                try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
+                window.location.href = '/login.html';
+            };
+
+            // Hotkeys: Q → Traffic Stats, W → Traffic Admin (works on any keyboard layout)
+            useEffect(() => {
+                const handler = (e) => {
+                    if (e.ctrlKey || e.metaKey || e.altKey) return;
+                    const t = e.target;
+                    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                    if (e.code === 'KeyQ' && location.pathname !== '/traffic.html' && location.pathname !== '/') {
+                        location.href = '/traffic.html';
+                    } else if (e.code === 'KeyW' && role === 'admin' && location.pathname !== '/traffic-admin.html') {
+                        location.href = '/traffic-admin.html';
+                    }
+                };
+                window.addEventListener('keydown', handler);
+                return () => window.removeEventListener('keydown', handler);
+            }, [role]);
+
+            const [campaigns, setCampaigns] = useState(mockCampaignsData);
+            const [isLoading, setIsLoading] = useState(true);
+            const [searchFilter, setSearchFilter] = useState('');
+            const [tasksOpen, setTasksOpen] = useState(false);
+            const [alertsOpen, setAlertsOpen] = useState(false);
+            const [activeAlerts, setActiveAlerts] = useState([]);
+            const goToCampaign = (customName) => {
+                setTasksOpen(false);
+                setSearchFilter('');
+                setTimeout(() => {
+                    const el = document.querySelector(`[data-camp-name="${(window.CSS && CSS.escape) ? CSS.escape(customName) : customName.replace(/"/g, '\\"')}"]`);
+                    if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        el.style.transition = 'box-shadow 0.3s';
+                        el.style.boxShadow = '0 0 0 2px rgb(249 115 22)';
+                        setTimeout(() => { el.style.boxShadow = ''; }, 2200);
+                    }
+                }, 120);
+            };
+            const allStatusKeys = CUSTOM_STATUSES.map(s => s.key);
+            const [statusFilter, setStatusFilter] = useState(() => {
+                try { const v = JSON.parse(localStorage.getItem('statusFilter_stats')); if (Array.isArray(v)) return v; } catch {}
+                return allStatusKeys;
+            });
+            const [showStatusFilter, setShowStatusFilter] = useState(false);
+            const toggleStatusFilter = (key) => {
+                setStatusFilter(prev => {
+                    const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+                    localStorage.setItem('statusFilter_stats', JSON.stringify(next));
+                    return next;
+                });
+            };
+            const [lastCheckedAt, setLastCheckedAt] = useState(null);
+            const [lastSyncTime, setLastSyncTime] = useState(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+
+            // Modal State
+            const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+            const [newCampName, setNewCampName] = useState('');
+            const [newCampUrl, setNewCampUrl] = useState('');
+            const [newCampSiteUrl, setNewCampSiteUrl] = useState('');
+            const [gridCampaigns, setGridCampaigns] = useState([]);
+            const [dropdownOpen, setDropdownOpen] = useState(false);
+            const [copied, setCopied] = useState(false);
+            const [copiedX2, setCopiedX2] = useState(false);
+            const [copiedNew, setCopiedNew] = useState(false);
+            const [isSavingOrder, setIsSavingOrder] = useState(false);
+            const [showYesterday, setShowYesterday] = useState(false);
+            const [snapshotAt, setSnapshotAt] = useState(null);
+            const isSnapshotMode = useRef(false);
+
+            // Sync State
+            const currentDataVersion = useRef(0);
+            const currentTrafficDataVersion = useRef(0);
+            const isFetching = useRef(false);
+            const configOrder = useRef([]);
+            const impressionHistory = useRef({});  // { campName: [imp1, imp2, imp3, imp4] }
+            const mutationVersion = useRef(0);
+
+            // Drag and Drop — refs-only approach (no async, no setTimeout)
+            const [draggedItemIndex, setDraggedItemIndex] = useState(null);
+            const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
+            const dragRef = useRef({ dragging: false, startIdx: null });
+            const dropTargetRef = useRef(null);
+            const campaignsRef = useRef([]);
+            campaignsRef.current = campaigns;
+            const searchFilterRef = useRef('');
+            searchFilterRef.current = searchFilter;
+
+            const buildSearchHaystack = (c) => {
+                if (!c) return '';
+                const parts = [c.name, c.customName, c.comment, c.siteUrl];
+                if (Array.isArray(c.keywords)) {
+                    for (const k of c.keywords) if (k && k.text) parts.push(k.text);
+                }
+                if (Array.isArray(c.queries)) {
+                    for (const q of c.queries) if (q && q.text) parts.push(q.text);
+                }
+                return parts.filter(Boolean).join(' ').toLowerCase();
+            };
+
+            const handleDragStart = (index) => {
+                dragRef.current = { dragging: true, startIdx: index };
+                dropTargetRef.current = null;
+                setDraggedItemIndex(index);
+            };
+
+            const handleDragEnter = (index) => {
+                if (!dragRef.current.dragging) return;
+                dropTargetRef.current = index;
+                setDragOverItemIndex(index);
+            };
+
+            useEffect(() => {
+                const handleMouseUp = () => {
+                    if (!dragRef.current.dragging) return;
+                    const dragIdx = dragRef.current.startIdx;
+                    const dropIdx = dropTargetRef.current;
+
+                    dragRef.current = { dragging: false, startIdx: null };
+                    dropTargetRef.current = null;
+                    setDragOverItemIndex(null);
+                    setDraggedItemIndex(null);
+
+                    if (dragIdx === null || dropIdx === null || dragIdx === dropIdx) return;
+
+                    const current = campaignsRef.current;
+                    const sf = searchFilterRef.current.toLowerCase();
+                    const sfNoSpaces = sf.replace(/\s+/g, '');
+                    const filtered = !sf ? current : current.filter(c => {
+                        const fields = buildSearchHaystack(c);
+                        return fields.includes(sf) || fields.replace(/\s+/g, '').includes(sfNoSpaces);
+                    });
+
+                    const draggedCamp = filtered[dragIdx];
+                    const targetCamp = filtered[dropIdx];
+                    if (!draggedCamp || !targetCamp) return;
+
+                    const globalDragIdx = current.findIndex(c => c.id === draggedCamp.id);
+                    const globalDropIdx = current.findIndex(c => c.id === targetCamp.id);
+
+                    const newCampaigns = [...current];
+                    newCampaigns.splice(globalDragIdx, 1);
+                    const finalInsertIdx = globalDragIdx < globalDropIdx ? globalDropIdx - 1 : globalDropIdx;
+                    newCampaigns.splice(finalInsertIdx, 0, draggedCamp);
+
+                    const newOrder = [...new Set(newCampaigns.map(c => c.customName))];
+                    const prevOrder = configOrder.current.slice();
+                    const prevCampaigns = current;
+
+                    configOrder.current = newOrder;
+                    setCampaigns(newCampaigns);
+                    mutationVersion.current++;
+                    setIsSavingOrder(true);
+
+                    const payload = JSON.stringify({ names: newOrder });
+
+                    fetch('/api/traffic-buyer/reorder', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: payload,
+                        keepalive: true
+                    })
+                    .then(res => {
+                        if (!res.ok) throw new Error('Server ' + res.status);
+                    })
+                    .catch(e => {
+                        console.error('Reorder save failed, rolling back:', e);
+                        configOrder.current = prevOrder;
+                        setCampaigns(prevCampaigns);
+                        mutationVersion.current++;
+                    })
+                    .finally(() => setIsSavingOrder(false));
+                };
+
+                document.addEventListener('mouseup', handleMouseUp);
+                return () => document.removeEventListener('mouseup', handleMouseUp);
+            }, []);
+            const [isGlobalRefreshing, setIsGlobalRefreshing] = useState(false);
+
+            const handleShowYesterday = async () => {
+                isSnapshotMode.current = true;
+                setShowYesterday(true);
+                await fetchDashboardData(true);
+            };
+
+            const handleShowCurrent = async () => {
+                isSnapshotMode.current = false;
+                setShowYesterday(false);
+                setSnapshotAt(null);
+                await fetchDashboardData(false);
+            };
+
+            const handleSingleCampaignRefresh = async (campaignName) => {
+                try {
+                    const res = await fetch(`/api/traffic-buyer/${encodeURIComponent(campaignName)}/refresh`, { method: 'POST' });
+                    if (!res.ok) {
+                        const errBody = await res.json().catch(() => ({ error: 'Unknown error' }));
+                        console.error('Single campaign refresh failed', errBody);
+                    }
+                } catch (e) {
+                    console.error('Single campaign refresh trigger failed', e);
+                }
+                await fetchDashboardData(false);
+            };
+
+            const handleGlobalRefresh = async () => {
+                if (isGlobalRefreshing) return;
+                setIsGlobalRefreshing(true);
+                const startVersion = currentTrafficDataVersion.current;
+                try {
+                    await fetch('/api/traffic-buyer/refresh', { method: 'POST' });
+                } catch (e) {
+                    console.error("Global refresh trigger failed", e);
+                    setIsGlobalRefreshing(false);
+                    return;
+                }
+                const maxWaitMs = 60000;
+                const startedAt = Date.now();
+                const waitInterval = setInterval(async () => {
+                    try {
+                        const r = await fetch('/api/status');
+                        if (r.ok) {
+                            const s = await r.json();
+                            if ((s.traffic_data || 0) > startVersion) {
+                                clearInterval(waitInterval);
+                                setIsGlobalRefreshing(false);
+                                return;
+                            }
+                        }
+                    } catch (_) { }
+                    if (Date.now() - startedAt > maxWaitMs) {
+                        clearInterval(waitInterval);
+                        setIsGlobalRefreshing(false);
+                    }
+                }, 1500);
+            };
+
+            const fetchDashboardData = async (snapshotMode = false) => {
+                if (isFetching.current) return;
+                isFetching.current = true;
+                const fetchMutation = mutationVersion.current;
+                setIsLoading(true);
+                try {
+                    let configs = [];
+                    try {
+                        const confRes = await fetch('/api/traffic-buyer');
+                        if (confRes.ok) {
+                            configs = await confRes.json();
+                            configOrder.current = configs.map(c => c.name);
+                        }
+                    } catch (e) {
+                        console.error("Failed to fetch traffic config from API:", e);
+                    }
+
+                    if (!configs || configs.length === 0) {
+                        setCampaigns([]);
+                        setIsLoading(false);
+                        isFetching.current = false;
+                        return;
+                    }
+
+                    let allCampaignsMap = {};
+
+                    // 1. Fetch from our Node background cache (or snapshot)
+                    try {
+                        const endpoint = snapshotMode ? '/api/traffic-buyer-data-snapshot' : '/api/traffic-buyer-data';
+                        const res = await fetch(endpoint);
+                        if (res.ok) {
+                            const json = await res.json();
+                            if (snapshotMode && (!json.success || !json.data || Object.keys(json.data).length === 0)) {
+                                alert('Нет сохранённых данных за вчера');
+                                setIsLoading(false);
+                                isFetching.current = false;
+                                return;
+                            }
+                            if (json.success !== false && json.data) {
+                                allCampaignsMap = json.data;
+                                if (snapshotMode) setSnapshotAt(json.snapshotAt || null);
+                                if (!snapshotMode) {
+                                    setActiveAlerts(Array.isArray(json.activeAlerts) ? json.activeAlerts : []);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Error fetching traffic data:", err);
+                    }
+
+                    // 2. Fetch Chessboard status
+                    let gridStatusMap = {};
+                    try {
+                        const cbRes = await fetch('/api/chessboard');
+                        if (cbRes.ok) {
+                            const cbData = await cbRes.json();
+                            cbData.forEach(c => {
+                                gridStatusMap[c.name] = c.status;
+                            });
+                        }
+                    } catch (e) { }
+
+                    // 3. Transform and map (only show campaigns that exist in config)
+                    const configNames = new Set(configs.map(c => c.name));
+                    const finalData = [];
+                    const seenConfigs = new Set();
+
+                    for (const campData of Object.values(allCampaignsMap)) {
+                        if (!configNames.has(campData.customName)) continue;
+                        seenConfigs.add(campData.customName);
+                        campData.queries.sort((a, b) => b.impressions - a.impressions);
+
+                        const impressionsStale = !!campData.impressionsStale;
+
+                        const luMs = campData.sheetLastUpdated ? new Date(campData.sheetLastUpdated).getTime() : NaN;
+                        const luValid = !isNaN(luMs);
+
+                        finalData.push({
+                            id: `${campData.customName}_${campData.name}`,
+                            name: campData.name,
+                            customName: campData.customName,
+                            url: campData.url,
+                            status: campData.status || 'PAUSED',
+                            lastUpdated: luValid
+                                ? new Date(luMs).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                                : new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+                            isStale: !luValid || (Date.now() - luMs) > 3 * 60 * 60 * 1000,
+                            impressionsStale,
+                            stats: campData.stats,
+                            queries: campData.queries,
+                            keywords: campData.keywords || [],
+                            adTexts: campData.adTexts || [],
+                            comment: campData.comment || '',
+                            customStatus: campData.customStatus || 'warmup',
+                            siteUrl: campData.siteUrl || '',
+                            addedAt: campData.addedAt || '',
+                            costAlert: campData.costAlert || 0,
+                            campTask: campData.campTask || '',
+                            campTaskUpdatedAt: campData.campTaskUpdatedAt || null,
+                            campNote: campData.campNote || '',
+                            costAlertNote: campData.costAlertNote || '',
+                            campTimer: campData.campTimer || 0,
+                            primaryKeyword: campData.primaryKeyword || '',
+                            lastReadAt: campData.lastReadAt || null
+                        });
+                    }
+                    
+                    // Add any configs that didn't yield campaigns (e.g. pending setup or script failure)
+                    for (const config of configs) {
+                        if (!seenConfigs.has(config.name)) {
+                            finalData.push({
+                                id: `pending_${config.name}`,
+                                name: 'СБОР ДАННЫХ...',
+                                customName: config.name,
+                                url: config.url,
+                                status: 'PENDING',
+                                lastUpdated: 'Ожидание сбора',
+                                isStale: false,
+                                impressionsStale: false,
+                                stats: { today: { impressions: 0, clicks: 0, cost: 0 }, allTime: { impressions: 0, clicks: 0, cost: 0 } },
+                                queries: [],
+                                comment: config.comment || '',
+                                customStatus: config.customStatus || 'warmup',
+                                siteUrl: config.siteUrl || '',
+                                addedAt: config.addedAt || '',
+                                costAlert: config.costAlert || 0,
+                                campNote: config.campNote || '',
+                                costAlertNote: config.costAlertNote || '',
+                                primaryKeyword: config.primaryKeyword || ''
+                            });
+                        }
+                    }
+
+                    // Sort campaigns strictly by the order saved in the backend configuration
+                    finalData.sort((a, b) => {
+                        let aIdx = configOrder.current.indexOf(a.customName); 
+                        let bIdx = configOrder.current.indexOf(b.customName); 
+                        if (aIdx === -1) aIdx = 999;
+                        if (bIdx === -1) bIdx = 999;
+                        return aIdx - bIdx;
+                    });
+
+                    // 4. Guard: if a local mutation (reorder/comment) happened during fetch, discard stale results
+                    if (mutationVersion.current !== fetchMutation) {
+                        return;
+                    }
+
+                    // 5. Record new version from Status
+                    try {
+                        const statusRes = await fetch('/api/status');
+                        if (statusRes.ok) {
+                            const statuses = await statusRes.json();
+                            currentDataVersion.current = statuses.traffic_buyer;
+                            currentTrafficDataVersion.current = statuses.traffic_buyer_data || 0;
+                        }
+                    } catch (e) { }
+
+                    setCampaigns(finalData);
+                    setLastSyncTime(new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
+                    const readTimes = finalData.map(c => c.lastReadAt ? new Date(c.lastReadAt).getTime() : 0).filter(t => t > 0);
+                    if (readTimes.length) setLastCheckedAt(new Date(Math.max(...readTimes)));
+                } catch (e) {
+                    console.error("fetchDashboard error", e);
+                } finally {
+                    setIsLoading(false);
+                    isFetching.current = false;
+                }
+            };
+
+            // Initiate fetch on mount and setup polling
+            useEffect(() => {
+                fetchDashboardData();
+
+                const interval = setInterval(async () => {
+                    try {
+                        if (isFetching.current || isSnapshotMode.current) return;
+                        const statusRes = await fetch('/api/status');
+                        if (!statusRes.ok) { if (statusRes.status === 401) flagAuthExpired(); return; }
+                        const statuses = await statusRes.json();
+
+                        if (statuses.traffic_buyer > currentDataVersion.current) {
+                            console.log("Traffic Config changed on server, refreshing...");
+                            fetchDashboardData();
+                            return;
+                        }
+
+                        if ((statuses.traffic_buyer_data || 0) > currentTrafficDataVersion.current) {
+                            console.log("Traffic Data refreshed on server, syncing...");
+                            fetchDashboardData();
+                            return;
+                        }
+
+                        if (statuses.chessboard > currentDataVersion.current) {
+                            fetchDashboardData();
+                        }
+                    } catch (e) { /* ignore offline errors */ }
+                }, 3000); // Check every 3 seconds for near-realtime sync across tabs
+
+                return () => clearInterval(interval);
+            }, []);
+
+            // Fetch Grid Campaigns formatting them as "Name (Tag)"
+            useEffect(() => {
+                const fetchCampaigns = async () => {
+                    if (!isAddModalOpen) return;
+
+                    try {
+                        console.log("Fetching campaigns from API...");
+                        const res = await fetch('/api/chessboard');
+                        if (res.ok) {
+                            const gridData = await res.json();
+                            const active = gridData.filter(c => c.status !== 'archive' && c.status !== 'delete');
+                            const formatted = active.map(c => c.desc ? `${c.name} (${c.desc})` : c.name);
+                            console.log("Fetched campaigns:", formatted.length);
+                            setGridCampaigns(formatted);
+                        } else {
+                            console.error("Failed API response:", res.status);
+                        }
+                    } catch (e) {
+                        console.error('Failed to load grid campaigns API:', e);
+
+                        // Fallback to localStorage just in case
+                        try {
+                            const raw = localStorage.getItem('traffic_grid_v1');
+                            if (raw) {
+                                const gridData = JSON.parse(raw);
+                                const active = gridData.filter(c => c.status !== 'archive' && c.status !== 'delete');
+                                const formatted = active.map(c => c.desc ? `${c.name} (${c.desc})` : c.name);
+                                setGridCampaigns(formatted);
+                            }
+                        } catch (fallbackErr) {
+                            console.error('Fallback failed:', fallbackErr);
+                        }
+                    }
+                };
+
+                fetchCampaigns();
+            }, [isAddModalOpen]);
+
+            const copyScript = async () => {
+                try {
+                    await copyToClipboard(GOOGLE_ADS_SCRIPT);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                } catch (err) {
+                    console.error('Failed to copy text: ', err);
+                }
+            };
+
+            const copyScriptNew = async () => {
+                try {
+                    await copyToClipboard(GOOGLE_ADS_SCRIPT_NEW);
+                    setCopiedNew(true);
+                    setTimeout(() => setCopiedNew(false), 2000);
+                } catch (err) {
+                }
+            };
+
+            const copyScriptX2 = async () => {
+                try {
+                    await copyToClipboard(GOOGLE_ADS_SCRIPT_X2);
+                    setCopiedX2(true);
+                    setTimeout(() => setCopiedX2(false), 2000);
+                } catch (err) {
+                    console.error('Failed to copy text: ', err);
+                }
+            };
+
+            const handleSaveCampaignLink = async (e) => {
+                e.preventDefault();
+                if (!newCampName || !newCampUrl) {
+                    alert('Пожалуйста, заполните оба поля');
+                    return;
+                }
+
+                try {
+                    // 1. Get current config from backend
+                    let existing = [];
+                    const confRes = await fetch('/api/traffic-buyer');
+                    if (confRes.ok) {
+                        existing = await confRes.json();
+                    }
+
+                    // 2. Append new campaign link
+                    existing.push({ name: newCampName, url: newCampUrl, siteUrl: newCampSiteUrl || '', addedAt: new Date().toISOString() });
+
+                    // 3. Save back to backend
+                    const saveRes = await fetch(`/api/traffic-buyer?version=${currentDataVersion.current}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(existing)
+                    });
+
+                    if (saveRes.status === 409) {
+                        alert('❌ ВНИМАНИЕ: Конфигурация была изменена в другой вкладке! Пожалуйста, обновите страницу (F5) чтобы получить актуальную версию перед добавлением новых кампаний.');
+                        return;
+                    }
+
+                    if (!saveRes.ok) throw new Error('Failed to save to backend');
+
+                    setIsAddModalOpen(false);
+                    setNewCampName('');
+                    setNewCampUrl('');
+                    setNewCampSiteUrl('');
+
+                    // Fetch data immediately
+                    fetchDashboardData();
+                } catch (err) {
+                    console.error('Error saving link:', err);
+                    alert('Ошибка при сохранении на сервер');
+                }
+            };
+
+            const filteredCampaigns = (() => {
+                let result = campaigns.filter(c => statusFilter.includes(c.customStatus || 'warmup'));
+                if (searchFilter.trim()) {
+                    const q = searchFilter.toLowerCase().replace(/\s+/g, '');
+                    result = result.filter(c => {
+                        const fields = buildSearchHaystack(c);
+                        return fields.includes(searchFilter.toLowerCase()) || fields.replace(/\s+/g, '').includes(q);
+                    });
+                }
+                return result;
+            })();
+
+            return (
+                <div className="flex flex-col h-full bg-black">
+                    {/* Header */}
+                    <header className="min-h-[3.5rem] py-2 border-b border-zinc-800 flex flex-wrap items-center justify-between px-6 gap-y-3 bg-zinc-950 flex-shrink-0 z-30 w-full overflow-visible relative">
+                        <div className="flex flex-wrap items-center gap-y-2">
+                            <i className="fas fa-chart-bar text-blue-500 mr-3"></i>
+                            <h1 className="text-xs sm:text-sm font-bold tracking-[0.2em] text-zinc-300 mr-2 sm:mr-3">TRAFFIC_STATS</h1>
+                            <span className="text-[10px] text-zinc-600 font-mono mr-4 sm:mr-6 self-end mb-[1px]">v1.3</span>
+                            {isSavingOrder && <span className="text-[10px] text-yellow-400 animate-pulse mr-3"><i className="fas fa-circle-notch fa-spin mr-1"></i>Сохранение...</span>}
+
+                            {/* TAB SWITCHER */}
+                            <div className="bg-zinc-800/50 p-1 rounded-lg flex items-center gap-1">
+                                <a href="/traffic.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider bg-zinc-700 text-zinc-100 rounded-md shadow-sm pointer-events-none">
+                                    <i className="fas fa-chart-bar mr-1.5"></i> Traffic Stats
+                                </a>
+                                {role === 'admin' && (
+                                <a href="/traffic-admin.html" className="px-2 py-1 text-[9px] sm:px-3 sm:py-1.5 sm:text-[10px] font-bold uppercase tracking-wider text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors rounded-md">
+                                    <i className="fas fa-cogs mr-1.5"></i> Traffic Admin
+                                </a>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+                            {/* Alerts dropdown (bell) */}
+                            {(() => {
+                                const alertsCount = activeAlerts.length;
+                                return (
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setAlertsOpen(v => !v); setTasksOpen(false); }}
+                                            title={`Уведомления (${alertsCount})`}
+                                            className={`px-2 py-1.5 rounded border transition-colors flex items-center gap-1.5 text-xs leading-4 ${alertsOpen ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-zinc-800 text-zinc-400 hover:text-orange-400 hover:border-orange-500 bg-zinc-900'}`}>
+                                            <i className="fas fa-bell text-xs leading-4"></i>
+                                            {alertsCount > 0 && (
+                                                <span className="px-1.5 py-[1px] text-[9px] bg-orange-500/20 text-orange-300 rounded-full">{alertsCount}</span>
+                                            )}
+                                            <i className={`fas fa-chevron-down text-[9px] transition-transform ${alertsOpen ? 'rotate-180' : ''}`}></i>
+                                        </button>
+                                        {alertsOpen && (
+                                            <div className="absolute top-9 right-0 z-40 w-[360px] max-h-[60vh] overflow-y-auto bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+                                                {activeAlerts.length === 0 ? (
+                                                    <div className="p-3 text-center text-[10px] text-zinc-600 uppercase tracking-widest">
+                                                        Нет активных уведомлений
+                                                    </div>
+                                                ) : (
+                                                    <div className="divide-y divide-zinc-800/60">
+                                                        {activeAlerts.map((a, i) => (
+                                                            <div key={`${a.type}-${a.customName}-${i}`} className="flex items-start gap-2 px-3 py-2 hover:bg-zinc-800/40 transition-colors">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-[11px] text-zinc-200 font-bold truncate">{a.customName}</div>
+                                                                    {a.type === 'cost' ? (
+                                                                        <div className="text-[10px] mt-0.5">
+                                                                            <span className="text-orange-400">💰 ${a.cost.toFixed(2)} / ${a.threshold.toFixed(2)}</span>
+                                                                            {a.note && <div className="text-zinc-400 mt-0.5">{a.note}</div>}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="text-[10px] mt-0.5">
+                                                                            <span className="text-yellow-400">🔑 ключи &gt; ${a.threshold}: {a.offending.length} шт</span>
+                                                                            <div className="text-zinc-500 mt-0.5 line-clamp-2">
+                                                                                {a.offending.slice(0, 2).map(o => `«${o.kwText}» $${o.cost.toFixed(2)}`).join(' · ')}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => { setAlertsOpen(false); goToCampaign(a.customName); }}
+                                                                    className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-zinc-700 text-zinc-300 hover:text-orange-400 hover:border-orange-500 transition-colors flex items-center gap-1 flex-shrink-0">
+                                                                    <i className="fas fa-arrow-right text-[8px]"></i>
+                                                                    Перейти
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                            {/* Tasks dropdown */}
+                            {(() => {
+                                const withTasks = campaigns
+                                    .filter(c => (c.campTask || '').trim())
+                                    .sort((a, b) => {
+                                        const ta = a.campTaskUpdatedAt ? Date.parse(a.campTaskUpdatedAt) || 0 : 0;
+                                        const tb = b.campTaskUpdatedAt ? Date.parse(b.campTaskUpdatedAt) || 0 : 0;
+                                        return tb - ta; // newest first
+                                    });
+                                const tasksCount = withTasks.length;
+                                return (
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setTasksOpen(v => !v); setAlertsOpen(false); }}
+                                            title={`Задачи (${tasksCount})`}
+                                            className={`px-2 py-1.5 rounded border transition-colors flex items-center gap-1.5 text-xs ${tasksOpen ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-zinc-800 text-zinc-400 hover:text-orange-400 hover:border-orange-500 bg-zinc-900'}`}>
+                                            <span>Задачи</span>
+                                            {tasksCount > 0 && (
+                                                <span className="px-1.5 py-[1px] text-[9px] bg-orange-500/20 text-orange-300 rounded-full">{tasksCount}</span>
+                                            )}
+                                            <i className={`fas fa-chevron-down text-[9px] transition-transform ${tasksOpen ? 'rotate-180' : ''}`}></i>
+                                        </button>
+                                        {tasksOpen && (
+                                            <div className="absolute top-9 right-0 z-40 w-[360px] max-h-[60vh] overflow-y-auto bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+                                                {withTasks.length === 0 ? (
+                                                    <div className="p-3 text-center text-[10px] text-zinc-600 uppercase tracking-widest">
+                                                        Нет задач
+                                                    </div>
+                                                ) : (
+                                                    <div className="divide-y divide-zinc-800/60">
+                                                        {withTasks.map(c => (
+                                                            <div key={c.id} className="flex items-start gap-2 px-3 py-2 hover:bg-zinc-800/40 transition-colors">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-[11px] text-zinc-200 font-bold truncate flex items-center gap-1.5">
+                                                                        <span className="truncate">{c.customName}</span>
+                                                                        {c.campTimer > 0 && (Date.now() - c.campTimer) < 86400000 && (
+                                                                            <svg width="12" height="12" viewBox="0 0 20 20" className="flex-shrink-0">
+                                                                                <circle cx="10" cy="10" r="8" fill="none" stroke="#3f3f46" strokeWidth="3" />
+                                                                                <circle cx="10" cy="10" r="8" fill="none" stroke="#a78bfa" strokeWidth="3"
+                                                                                    strokeDasharray={`${Math.max(0, 1 - (Date.now() - c.campTimer) / 86400000) * 50.265} 50.265`}
+                                                                                    strokeLinecap="round"
+                                                                                    transform="rotate(-90 10 10)" />
+                                                                            </svg>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="text-[10px] text-zinc-400 whitespace-pre-wrap mt-0.5 line-clamp-3">{c.campTask}</div>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => goToCampaign(c.customName)}
+                                                                    className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-zinc-700 text-zinc-300 hover:text-orange-400 hover:border-orange-500 transition-colors flex items-center gap-1 flex-shrink-0">
+                                                                    <i className="fas fa-arrow-right text-[8px]"></i>
+                                                                    Перейти
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                            {/* Quick Search */}
+                            <div className="relative flex-1 sm:flex-none">
+                                <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-zinc-600 text-xs"></i>
+                                <input
+                                    type="text"
+                                    placeholder="Поиск кампании..."
+                                    className="bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 pl-8 pr-3 py-1.5 focus:outline-none focus:border-purple-500 w-full sm:w-64 transition-colors rounded"
+                                    value={searchFilter}
+                                    onChange={e => setSearchFilter(e.target.value)}
+                                />
+                            </div>
+                            {/* Status Filter */}
+                            <div className="relative">
+                                <button onClick={() => setShowStatusFilter(!showStatusFilter)}
+                                    className={`px-2 py-1.5 rounded border text-xs transition-colors flex items-center gap-1.5 ${statusFilter.length < allStatusKeys.length ? 'border-purple-500 text-purple-400 bg-purple-500/10' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300 bg-zinc-900'}`}>
+                                    <i className="fas fa-filter text-[10px]"></i>
+                                </button>
+                                {showStatusFilter && (
+                                    <div className="absolute top-9 right-0 z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-2 px-1 w-40" onClick={e => e.stopPropagation()}>
+                                        {CUSTOM_STATUSES.map(s => (
+                                            <label key={s.key} className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-zinc-800 transition-colors ${s.color}`}>
+                                                <input type="checkbox" checked={statusFilter.includes(s.key)} onChange={() => toggleStatusFilter(s.key)}
+                                                    className="accent-purple-500 w-3 h-3" />
+                                                <i className={`fas ${s.icon} text-[9px]`}></i>
+                                                <span className="text-[10px] font-bold uppercase tracking-wider">{s.label}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            {!showYesterday ? (
+                                <button
+                                    onClick={handleShowYesterday}
+                                    className="bg-amber-700/60 hover:bg-amber-600/70 text-amber-200 px-2 py-1.5 text-xs rounded shadow-sm transition-colors border border-amber-700/50"
+                                    title="Показать сохранённые данные за вчера"
+                                >
+                                    <i className="fas fa-history"></i>
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleShowCurrent}
+                                    className="bg-purple-600 hover:bg-purple-500 text-white px-2 py-1.5 text-xs rounded shadow-sm transition-colors"
+                                    title="Вернуться к актуальным данным"
+                                >
+                                    <i className="fas fa-arrow-left"></i>
+                                </button>
+                            )}
+                            <button
+                                onClick={() => setIsAddModalOpen(true)}
+                                className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 text-xs font-bold rounded shadow-sm transition-colors whitespace-nowrap flex items-center gap-2"
+                            >
+                                <i className="fas fa-plus mix-blend-overlay"></i>
+                                ДОБАВИТЬ КАМПАНИЮ
+                            </button>
+                            <button
+                                onClick={handleLogout}
+                                className="text-zinc-500 hover:text-red-400 px-2 py-1.5 text-xs transition-colors flex items-center gap-1.5"
+                                title="Выйти"
+                            >
+                                <i className="fas fa-sign-out-alt"></i>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Main Table Area */}
+                    <main className="flex-1 overflow-hidden flex flex-col bg-[#0c0c0e]">
+                        {/* Table Headers */}
+                        <div className="flex items-center p-3 border-b border-zinc-800 bg-zinc-950 text-[10px] uppercase tracking-widest text-zinc-500 font-bold sticky top-0 z-20 shadow-sm">
+                            <div className="w-8 flex-shrink-0"></div> {/* Spacer for chevron */}
+                            <div className="flex-1 flex items-center gap-2">
+                                Название кампании
+                                <button onClick={handleGlobalRefresh} className={`hover:text-purple-400 transition-colors ${isGlobalRefreshing ? 'animate-spin text-blue-400' : 'text-zinc-600'}`} title="Принудительно обновить все таблицы">
+                                    <i className="fas fa-sync-alt"></i>
+                                </button>
+                                {lastCheckedAt && (
+                                    <span className="text-[9px] text-zinc-600 font-normal normal-case tracking-normal ml-1" title={`Сервер проверил таблицы: ${lastCheckedAt.toLocaleString('ru-RU')}`}>
+                                        <i className="far fa-clock mr-1"></i>
+                                        {lastCheckedAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="w-56 flex-shrink-0 pl-4 border-l border-zinc-800/0">
+                                {showYesterday ? 'Данные за вчера' : 'Данные за сегодня'}
+                            </div>
+                            <div className="w-56 flex-shrink-0 pl-4 border-l border-zinc-800/0">Данные за все время</div>
+                        </div>
+
+                        {/* Yesterday / Current toggle bar */}
+                        {showYesterday && (
+                            <div className="flex items-center gap-3 px-4 py-2 bg-amber-950/30 border-b border-amber-800/30 text-xs">
+                                <i className="fas fa-history text-amber-400"></i>
+                                <span className="text-amber-300">
+                                    Показаны данные за вчера
+                                    {snapshotAt && ` (снимок ${new Date(snapshotAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })})`}
+                                </span>
+                                <button onClick={handleShowCurrent} className="ml-auto px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-bold transition-colors">
+                                    <i className="fas fa-arrow-left mr-1"></i>Актуальные
+                                </button>
+                            </div>
+                        )}
+
+                        {/* List */}
+                        <div className="flex-1 overflow-y-auto custom-scrollbar pb-10">
+                            {filteredCampaigns.length === 0 ? (
+                                <div className="p-10 text-center text-zinc-600 text-xs uppercase tracking-widest flex flex-col items-center gap-2">
+                                    <i className="fas fa-ghost text-2xl mb-2 opacity-20"></i>
+                                    Данные не найдены
+                                </div>
+                            ) : (
+                                filteredCampaigns.map((camp, idx) => (
+                                    <CampaignRow 
+                                        key={camp.id} 
+                                        data={camp} 
+                                        onRefresh={handleSingleCampaignRefresh}
+                                        index={idx}
+                                        onDragStart={!searchFilter ? handleDragStart : null}
+                                        onDragEnter={!searchFilter ? handleDragEnter : null}
+                                        isDraggedOver={dragOverItemIndex === idx && draggedItemIndex !== idx}
+                                        isDragged={draggedItemIndex === idx}
+                                    />
+                                ))
+                            )}
+                        </div>
+                    </main>
+
+                    {/* Add Campaign Modal */}
+                    {isAddModalOpen && (
+                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+                            <div className="bg-zinc-950 border border-zinc-700/50 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                {/* Modal Header */}
+                                <div className="px-6 py-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                                            <i className="fas fa-plus text-purple-400"></i>
+                                        </div>
+                                        <div>
+                                            <h2 className="text-lg font-bold text-zinc-100 tracking-wide">Добавление кампании</h2>
+                                            <p className="text-xs text-zinc-400">Настройка выгрузки из Google Ads</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setIsAddModalOpen(false)}
+                                        className="text-zinc-500 hover:text-white transition-colors p-2"
+                                    >
+                                        <i className="fas fa-times text-lg"></i>
+                                    </button>
+                                </div>
+
+                                {/* Modal Content - Scrollable */}
+                                <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+
+                                    {/* Step 1: Instructions & Script */}
+                                    <div className="mb-8">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="bg-purple-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">1</span>
+                                            <h3 className="text-sm font-bold text-zinc-200">Скрипт Google Ads</h3>
+                                        </div>
+                                        <p className="text-xs text-zinc-400 mb-3 ml-7">
+                                            Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads. Он автоматически создаст Google Таблицу со статистикой.
+                                        </p>
+                                        <div className="ml-7 relative group">
+                                            <div className="absolute right-2 top-2 z-10 flex gap-2">
+                                                <button
+                                                    onClick={copyScript}
+                                                    className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-zinc-700/50"
+                                                    title="Копировать стандартный скрипт"
+                                                >
+                                                    {copied ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> Копировать</>}
+                                                </button>
+                                                <button
+                                                    onClick={copyScriptX2}
+                                                    className="bg-purple-900/40 hover:bg-purple-800/60 text-purple-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-purple-800/50"
+                                                    title="Копировать обновленный (x2) скрипт"
+                                                >
+                                                    {copiedX2 ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> x2</>}
+                                                </button>
+                                                <button
+                                                    onClick={copyScriptNew}
+                                                    className="bg-green-900/40 hover:bg-green-800/60 text-green-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-green-800/50"
+                                                    title="Копировать расширенный скрипт (ключи + заголовки)"
+                                                >
+                                                    {copiedNew ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> NEW</>}
+                                                </button>
+                                            </div>
+                                            <pre className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg text-[10px] text-zinc-300 font-mono overflow-x-auto h-32 custom-scrollbar">
+                                                {GOOGLE_ADS_SCRIPT}
+                                            </pre>
+                                        </div>
+                                    </div>
+
+                                    {/* Step 2: Linking Form */}
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-4">
+                                            <span className="bg-purple-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">2</span>
+                                            <h3 className="text-sm font-bold text-zinc-200">Привязка данных</h3>
+                                        </div>
+
+                                        <form onSubmit={handleSaveCampaignLink} className="ml-7 space-y-4">
+                                            <div className="relative">
+                                                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Название кампании</label>
+                                                <input
+                                                    type="text"
+                                                    value={newCampName}
+                                                    onChange={e => setNewCampName(e.target.value)}
+                                                    onFocus={() => setDropdownOpen(true)}
+                                                    onBlur={() => setTimeout(() => setDropdownOpen(false), 200)}
+                                                    placeholder="Выберите из списка или введите вручную"
+                                                    className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-3 rounded-lg focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
+                                                />
+                                                {dropdownOpen && (
+                                                    <div className="absolute z-50 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl max-h-48 overflow-y-auto custom-scrollbar">
+                                                        {gridCampaigns.length > 0 ? (
+                                                            <>
+                                                                {gridCampaigns
+                                                                    .filter(name => name.toLowerCase().includes(newCampName.toLowerCase()))
+                                                                    .map((name, i) => (
+                                                                        <div
+                                                                            key={i}
+                                                                            className="px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer transition-colors"
+                                                                            onMouseDown={() => {
+                                                                                setNewCampName(name);
+                                                                                setDropdownOpen(false);
+                                                                            }}
+                                                                        >
+                                                                            {name}
+                                                                        </div>
+                                                                    ))}
+                                                                {gridCampaigns.filter(name => name.toLowerCase().includes(newCampName.toLowerCase())).length === 0 && (
+                                                                    <div className="px-4 py-2 text-sm text-zinc-500 italic">Нет совпадений</div>
+                                                                )}
+                                                            </>
+                                                        ) : (
+                                                            <div className="px-4 py-3 pb-4 text-sm flex flex-col items-center justify-center text-zinc-500 gap-2">
+                                                                <i className="fas fa-ghost text-lg opacity-50 mb-1 mt-2"></i>
+                                                                <span className="font-bold">Список пуст</span>
+                                                                <span className="text-[10px] text-zinc-600 text-center leading-tight">Сначала добавьте кампании<br />в Chessboard</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                <p className="text-[10px] text-zinc-500 mt-1">
+                                                    Связывает эту таблицу с кампанией из Chessboard.
+                                                </p>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Ссылка на Google Таблицу</label>
+                                                <input
+                                                    type="url"
+                                                    value={newCampUrl}
+                                                    onChange={e => setNewCampUrl(e.target.value)}
+                                                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                                                    className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-3 rounded-lg focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
+                                                />
+                                                <p className="text-[10px] text-zinc-500 mt-1">
+                                                    Вставьте ссылку на Google Таблицу, которую сгенерировал скрипт.
+                                                </p>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Сайт (необязательно)</label>
+                                                <input
+                                                    type="url"
+                                                    value={newCampSiteUrl}
+                                                    onChange={e => setNewCampSiteUrl(e.target.value)}
+                                                    placeholder="https://example.com"
+                                                    className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-3 rounded-lg focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
+                                                />
+                                            </div>
+
+                                            <div className="pt-4 flex justify-end gap-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsAddModalOpen(false)}
+                                                    className="px-4 py-2 text-xs font-bold text-zinc-400 hover:text-white transition-colors"
+                                                >
+                                                    ОТМЕНА
+                                                </button>
+                                                <button
+                                                    type="submit"
+                                                    className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 text-xs font-bold rounded shadow-lg transition-colors flex items-center gap-2"
+                                                >
+                                                    <i className="fas fa-save"></i>
+                                                    СОХРАНИТЬ ПРИВЯЗКУ
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Status Footer */}
+                    <footer className="h-8 border-t border-zinc-800 bg-zinc-950 flex items-center justify-between px-4 z-10 text-[10px] text-zinc-500">
+                        <div className="flex items-center gap-4">
+                            <div>
+                                Синхронизация данных: <span className="text-green-500">ONLINE</span>
+                            </div>
+                            <div className="border-l border-zinc-800 pl-4">
+                                Последнее глобальное обновление: <span className="text-zinc-300 font-mono">{lastSyncTime}</span>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            {(() => {
+                                const t = filteredCampaigns.filter(c => c.customStatus !== 'ban').reduce((a, c) => {
+                                    a.imp += c.stats?.today?.impressions || 0;
+                                    a.clicks += c.stats?.today?.clicks || 0;
+                                    a.cost += c.stats?.today?.cost || 0;
+                                    return a;
+                                }, { imp: 0, clicks: 0, cost: 0 });
+                                return (
+                                    <span className="flex items-center gap-2 border-r border-zinc-800 pr-4 text-xs">
+                                        <span className="text-zinc-500">Сегодня:</span>
+                                        <span className="text-blue-400 font-bold"><i className="far fa-eye mr-0.5"></i>{formatNumber(t.imp)}</span>
+                                        <span className="text-purple-400 font-bold"><i className="fas fa-mouse-pointer mr-0.5"></i>{formatNumber(t.clicks)}</span>
+                                        <span className="text-red-400 font-bold"><i className="fas fa-dollar-sign mr-0.5"></i>{t.cost.toFixed(2)}</span>
+                                    </span>
+                                );
+                            })()}
+                            <span className="uppercase tracking-widest">Кампаний: {filteredCampaigns.length}</span>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<><App /><SessionExpiredOverlay /></>);
+    </script>
+</body>
+
+</html>
