@@ -26,3 +26,4 @@ saved_sessions/*.txt
 *.tmp
 *.bak-*
 .DS_Store
+saved_sessions/snapshots_archive/

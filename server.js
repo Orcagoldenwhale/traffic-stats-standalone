@@ -2954,8 +2954,33 @@ async function saveDataSnapshot() {
             await rename(tmpFile, dst);
         }
         console.log(`[Snapshot] Daily snapshot saved at ${ts}`);
+        await archiveDailySnapshots(ts);
     } catch (e) {
         console.error('[Snapshot] Failed to save:', e.message);
+    }
+}
+
+// --- Snapshot archive (hidden, server-side): keep a DATED copy of every dashboard's daily snapshot,
+// so any past day can be recovered/read straight from the server. No frontend, no pruning (kept indefinitely). ---
+const SNAPSHOT_ARCHIVE_DIR = join(SESSIONS_DIR, 'snapshots_archive');
+async function archiveDailySnapshots(ts) {
+    try {
+        const d = new Date(new Date(ts).getTime() + SNAPSHOT_TZ_OFFSET * 3600 * 1000);
+        const dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        const dir = join(SNAPSHOT_ARCHIVE_DIR, dateStr);
+        if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+        let n = 0;
+        for (const [src, name] of [[TRAFFIC_DATA_SNAPSHOT_FILE, 'traffic_data.json'], [TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE, 'traffic_admin_data.json'], [TRAFFIC_BUYER_DATA_SNAPSHOT_FILE, 'traffic_buyer_data.json']]) {
+            if (!existsSync(src)) continue;
+            const raw = await readFile(src, 'utf-8');
+            const tmp = join(dir, name + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp');
+            await writeFile(tmp, raw, 'utf-8');
+            await rename(tmp, join(dir, name));
+            n++;
+        }
+        console.log(`[Archive] Daily snapshots archived -> snapshots_archive/${dateStr} (${n} dashboards)`);
+    } catch (e) {
+        console.error('[Archive] snapshot archive failed:', e.message);
     }
 }
 
