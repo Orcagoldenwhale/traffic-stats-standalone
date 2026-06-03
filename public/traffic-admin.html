@@ -1693,6 +1693,7 @@ function ensureSharing(sheetId, props) {
                                     const linked = links[name];
                                     const isOpen = openRow === name;
                                     const isDup = linked && idCount[linked.id] > 1;
+                                    const dupWith = isDup ? Object.keys(links).filter(n => n !== name && links[n] && links[n].id === linked.id) : [];
                                     const isBanned = bannedSet.has(name);
                                     return (
                                         <tr key={name} className={`border-t transition-colors hover:bg-zinc-700/60 ${isDup ? 'bg-amber-500/10 border-amber-500/30' : 'border-zinc-800/60'} ${isBanned ? 'opacity-60' : ''}`}>
@@ -1702,7 +1703,7 @@ function ensureSharing(sheetId, props) {
                                                     <div className="flex items-center gap-2 flex-wrap">
                                                         <span className="text-cyan-400"><i className="fas fa-link mr-1.5 text-[10px]"></i>{linked.name}</span>
                                                         {linked.alias && <span className="text-[10px] text-zinc-600 font-mono">{linked.alias}</span>}
-                                                        {isDup && <span className="text-amber-400 text-[10px] font-bold" title="Эта кампания Keitaro привязана к нескольким вашим — дубль, поправьте"><i className="fas fa-exclamation-triangle mr-1"></i>дубль</span>}
+                                                        {isDup && <span className="text-amber-400 text-[10px] font-bold" title={'Эта кампания Keitaro уже привязана к: ' + dupWith.join(', ') + ' — дубль, поправьте'}><i className="fas fa-exclamation-triangle mr-1"></i>дубль{dupWith.length > 0 && <span className="font-normal text-amber-300"> с: {dupWith.join(', ')}</span>}</span>}
                                                         <button type="button" onClick={() => { setOpenRow(name); setSearch(''); }} className="text-zinc-500 hover:text-cyan-400 text-[10px]" title="Изменить"><i className="fas fa-pen"></i></button>
                                                         <button type="button" onClick={() => saveLink(name, null)} className="text-zinc-500 hover:text-red-400 text-[10px]" title="Убрать связь"><i className="fas fa-times"></i></button>
                                                     </div>
