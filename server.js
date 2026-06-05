@@ -445,6 +445,28 @@ app.get('/api/keitaro/links', async (req, res) => {
     }
 });
 
+// При переименовании кампании переносим её связь Keitaro на новое имя, чтобы не
+// оставлять висячую (orphan) связь под старым именем (иначе — ложный дубль).
+// Если новое имя уже связано — старую связь просто убираем. Best-effort: сбой не ломает рейнейм.
+async function migrateKeitaroLink(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    try {
+        await withFileLock(KEITARO_LINKS_FILE, async () => {
+            if (!existsSync(KEITARO_LINKS_FILE)) return;
+            let links;
+            try { links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); } catch { return; }
+            if (!links[oldName]) return;
+            if (!links[newName]) links[newName] = links[oldName];
+            delete links[oldName];
+            const tmp = KEITARO_LINKS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+            await writeFile(tmp, JSON.stringify(links, null, 2), 'utf-8');
+            await rename(tmp, KEITARO_LINKS_FILE);
+        });
+    } catch (e) {
+        console.error('[Keitaro] migrate link on rename failed:', e.message);
+    }
+}
+
 app.post('/api/keitaro/links', async (req, res) => {
     try {
         const { campaign, keitaro } = req.body || {};
@@ -1465,6 +1487,7 @@ app.put('/api/traffic/:name/edit', async (req, res) => {
             await rename(tmpFile, TRAFFIC_FILE);
             timestamps.traffic = Date.now();
         });
+        await migrateKeitaroLink(oldName, newName);
         auditLog('EDIT', 'traffic', `old=${oldName} new=${newName}`, req);
         res.json({ ok: true });
         refreshTrafficData({ onlyCampaignName: newName }).catch(e => console.error('[Server] Auto-refresh after edit failed:', e));
@@ -1779,6 +1802,7 @@ app.put('/api/traffic-admin/:name/edit', async (req, res) => {
             await rename(tmpFile, TRAFFIC_ADMIN_FILE);
             timestamps.traffic_admin = Date.now();
         });
+        await migrateKeitaroLink(oldName, newName);
         auditLog('EDIT', 'traffic-admin', `old=${oldName} new=${newName}`, req);
         res.json({ ok: true });
         refreshTrafficAdminData({ onlyCampaignName: newName }).catch(e => console.error('[Server] Admin auto-refresh after edit failed:', e));
