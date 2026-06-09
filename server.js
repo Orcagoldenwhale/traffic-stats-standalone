@@ -584,6 +584,11 @@ async function runKeitaroCostExport(trigger) {
     keitaroExportRunning = true;
     try {
         const links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8'));
+        // Не выгружаем расход по забаненным кампаниям (текущий статус из конфигов Stats+Admin).
+        const bannedSet = new Set();
+        for (const cf of [TRAFFIC_FILE, TRAFFIC_ADMIN_FILE]) {
+            try { if (existsSync(cf)) { for (const c of JSON.parse(await readFile(cf, 'utf-8'))) { if (c && (c.customStatus || '').toLowerCase() === 'ban') bannedSet.add(c.name); } } } catch (e) { /* ignore */ }
+        }
         let snapAt = null;
         const costByName = {};
         for (const f of [TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE, TRAFFIC_DATA_SNAPSHOT_FILE]) {
@@ -601,6 +606,7 @@ async function runKeitaroCostExport(trigger) {
 
         const byId = {};
         for (const [cn, link] of Object.entries(links)) {
+            if (bannedSet.has(cn)) continue; // забаненные кампании в выгрузку расходов не идут
             const cost = costByName[cn] || 0;
             if (!byId[link.id]) byId[link.id] = { id: link.id, kname: link.name, cost: 0, cns: [] };
             byId[link.id].cost += cost;
