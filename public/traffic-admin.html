@@ -1818,6 +1818,111 @@ function ensureSharing(sheetId, props) {
         };
 
         // --- MAIN DASHBOARD ---
+        // --- РАЗБОР: норма по гео + кампании vs норма + рабочие ключи + тренд ---
+        const BreakdownPanel = () => {
+            const { useState, useEffect } = React;
+            const [win, setWin] = useState(7);
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [err, setErr] = useState('');
+            const [open, setOpen] = useState({});
+            useEffect(() => {
+                let alive = true; setLoading(true); setErr('');
+                fetch('/api/keitaro/breakdown?window=' + win)
+                    .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.error || ('HTTP ' + r.status))))
+                    .then(d => { if (alive) { setData(d); setLoading(false); } })
+                    .catch(e => { if (alive) { setErr(String(e)); setLoading(false); } });
+                return () => { alive = false; };
+            }, [win]);
+            const money = n => '$' + Math.round(n || 0).toLocaleString('ru-RU');
+            const pct = n => (n == null ? '—' : Math.round(n) + '%');
+            const f1 = n => (n == null ? '—' : (+n).toFixed(1));
+            const trendEl = t => t == null ? <span className="text-zinc-600">—</span> : <span className={t >= 0 ? 'text-green-400' : 'text-red-400'}>{t >= 0 ? '▲' : '▼'}{Math.abs(Math.round(t))}%</span>;
+            const tierBadge = { T1: 'text-green-400 border-green-500/40', T2: 'text-cyan-400 border-cyan-500/30', T3: 'text-amber-400 border-amber-500/30', low: 'text-red-400 border-red-500/30' };
+            const flagRow = { green: 'bg-green-500/10', red: 'bg-red-500/10', gray: '' };
+            const flagDot = { green: '🟢', red: '🔴', gray: '⚪' };
+            const geoTitle = g => `рег/100 ${f1(g.crReg)} · CPL ${money(g.cpl)} · чек/деп ${money(g.payoutDep)} · профит ${money(g.prof)} · доля ${Math.round(g.sharePct)}%`;
+            const campTitle = c => `ключ: ${c.workingKey || '—'} · оффер: ${c.offer || '—'} · рег/100 ${f1(c.crReg)} · CPL ${money(c.cpl)} · чек/деп ${money(c.payoutDep)} · CTR ${c.ctr == null ? '—' : f1(c.ctr) + '%'} · профит ${money(c.prof)}`;
+            return (
+                <div className="h-full flex flex-col text-xs">
+                    <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-zinc-500 mr-1">Период:</span>
+                            {[1, 7, 14].map(w => (
+                                <button key={w} onClick={() => setWin(w)} className={`px-2.5 py-1 rounded text-xs ${win === w ? 'bg-cyan-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>{w}д</button>
+                            ))}
+                            {data && <span className="text-zinc-600 ml-2 hidden md:inline">{data.cur.from}…{data.cur.to} · тренд vs {data.prv.from}…{data.prv.to}</span>}
+                        </div>
+                        <div className="flex items-center gap-3 text-[10px] text-zinc-500">
+                            <span>🟢 выше нормы · 🔴 слив/ниже · ⚪ норма</span>
+                            {data && <span className="text-zinc-400">эталон: CR→деп ≥{data.benchmark.crDep}% · рега→деп ≥{data.benchmark.reg2dep}% · ROI ≥{data.benchmark.roi}%</span>}
+                        </div>
+                    </div>
+                    {loading && <div className="text-zinc-500 p-4"><i className="fas fa-circle-notch fa-spin mr-2"></i>Считаю по Keitaro…</div>}
+                    {err && <div className="text-red-400 p-4">Ошибка: {err}</div>}
+                    {data && !loading && (
+                        <div className="flex-1 overflow-auto">
+                            <div className="mb-3 text-zinc-300 flex flex-wrap gap-x-5 gap-y-1">
+                                <span>ИТОГО доход <b className="text-zinc-100">{money(data.totals.rev)}</b></span>
+                                <span>профит <b className={data.totals.prof >= 0 ? 'text-green-400' : 'text-red-400'}>{money(data.totals.prof)}</b></span>
+                                <span>ROI <b>{pct(data.totals.roi * 100)}</b></span>
+                                <span className="text-zinc-500">клики {data.totals.clk} · рег {data.totals.reg} · деп {data.totals.dep}</span>
+                            </div>
+                            <table className="w-full">
+                                <thead className="text-zinc-500 text-[10px] uppercase sticky top-0 bg-zinc-900">
+                                    <tr className="text-left border-b border-zinc-800">
+                                        <th className="py-1 pr-2">Гео / кампания</th><th>Тир</th><th className="text-right">$/100</th><th className="text-right">EPC↗</th><th className="text-right">деп/100</th><th className="text-right">рег→деп</th><th className="text-right">CPC</th><th className="text-right">CPD</th><th className="text-right">доход</th><th className="text-right">ROI</th><th className="text-right">камп/ключ</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {data.geos.map(g => (
+                                        <React.Fragment key={g.geo}>
+                                            <tr className="border-b border-zinc-800/60 cursor-pointer hover:bg-zinc-800/40" onClick={() => setOpen(o => ({ ...o, [g.geo]: !o[g.geo] }))} title={geoTitle(g)}>
+                                                <td className="py-1.5 pr-2 text-zinc-200 font-medium"><i className={`fas fa-chevron-${open[g.geo] ? 'down' : 'right'} text-[8px] mr-1.5 text-zinc-600`}></i>{g.geo}</td>
+                                                <td><span className={`px-1.5 py-0.5 rounded border text-[10px] ${tierBadge[g.tier] || ''}`}>{g.tier === 'low' ? 'минус' : g.tier}</span></td>
+                                                <td className="text-right text-zinc-200">{money(g.d100)}</td>
+                                                <td className="text-right">{trendEl(g.trendEpc)}</td>
+                                                <td className="text-right">{f1(g.crDep)}</td>
+                                                <td className="text-right">{f1(g.reg2dep)}%</td>
+                                                <td className="text-right text-zinc-400">{money(g.cpc)}</td>
+                                                <td className="text-right text-zinc-400">{g.cpd ? money(g.cpd) : '—'}</td>
+                                                <td className="text-right text-zinc-200">{money(g.rev)}</td>
+                                                <td className="text-right">{pct(g.roi * 100)}</td>
+                                                <td className="text-right text-zinc-400">{g.n}</td>
+                                            </tr>
+                                            {open[g.geo] && g.camps.map(c => (
+                                                <tr key={c.name} className={`text-[11px] ${flagRow[c.flag] || ''}`} title={campTitle(c)}>
+                                                    <td className="py-1 pl-5 pr-2 text-zinc-300" colSpan={2}>{flagDot[c.flag]} {c.name}</td>
+                                                    <td className="text-right">{money(c.epc * 100)}</td>
+                                                    <td className="text-right">{trendEl(c.trendEpc)}</td>
+                                                    <td className="text-right">{f1(c.crDep)}</td>
+                                                    <td className="text-right">{f1(c.reg2dep)}%</td>
+                                                    <td className="text-right text-zinc-400">{money(c.cpc)}</td>
+                                                    <td className="text-right text-zinc-400">{c.cpd ? money(c.cpd) : '—'}</td>
+                                                    <td className="text-right">{money(c.rev)}<span className="text-zinc-500">/{c.dep}д</span></td>
+                                                    <td className="text-right">{pct(c.roi * 100)}</td>
+                                                    <td className="text-right text-[10px] text-zinc-400 max-w-[120px] truncate">{c.workingKey || '—'}</td>
+                                                </tr>
+                                            ))}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {data.demandgen && data.demandgen.n > 0 && (
+                                <div className="mt-4 border-t border-zinc-800 pt-3">
+                                    <div className="text-amber-400 font-bold mb-1">DemandGen (отдельно): {data.demandgen.n} камп · {data.demandgen.clk} кликов · {data.demandgen.dep} деп · {money(data.demandgen.rev)} · ROI {data.demandgen.cost > 0 ? pct(data.demandgen.roi * 100) : '—'}</div>
+                                    {data.demandgen.rev === 0 && data.demandgen.clk > 100 && <div className="text-red-400 text-[11px] mb-1">⚠ {data.demandgen.clk} кликов и 0 депов — кандидат на отключение</div>}
+                                    {data.demandgen.camps.map(c => (
+                                        <div key={c.name} className="text-[11px] text-zinc-400 pl-3">{c.name} — {c.clk} клк / {c.dep} деп / {money(c.rev)}</div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const Dashboard = () => {
             const { useState, useEffect, useRef } = React;
 
@@ -1925,6 +2030,7 @@ function ensureSharing(sheetId, props) {
             const [analyticsFiles, setAnalyticsFiles] = useState([]);
             const [analyticsPickerOpen, setAnalyticsPickerOpen] = useState(false);
             const [keitaroOpen, setKeitaroOpen] = useState(false);
+            const [breakdownOpen, setBreakdownOpen] = useState(false);
 
             const fmtDateRu = (iso) => {
                 if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || '';
@@ -2569,6 +2675,14 @@ function ensureSharing(sheetId, props) {
                             </button>
                             <button
                                 type="button"
+                                onClick={() => setBreakdownOpen(true)}
+                                title="Разбор: норма по гео, кампании vs норма, рабочие ключи, тренд"
+                                className="px-2 py-1.5 rounded border border-zinc-800 text-zinc-400 hover:text-emerald-400 hover:border-emerald-500 bg-zinc-900 transition-colors flex items-center gap-1.5 text-xs">
+                                <i className="fas fa-chart-pie text-[11px]"></i>
+                                <span className="hidden sm:inline">Разбор</span>
+                            </button>
+                            <button
+                                type="button"
                                 onClick={openNotes}
                                 title="Заметки и идеи"
                                 className="px-2 py-1.5 rounded border border-zinc-800 text-zinc-400 hover:text-yellow-400 hover:border-yellow-500 bg-zinc-900 transition-colors flex items-center gap-1.5 text-xs">
@@ -3137,6 +3251,23 @@ function ensureSharing(sheetId, props) {
                                 </div>
                                 <div className="flex-1 overflow-hidden p-4">
                                     <KeitaroPanel />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {breakdownOpen && (
+                        <div className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-2" onClick={() => setBreakdownOpen(false)}>
+                            <div className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-full max-w-none h-[92vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <i className="fas fa-chart-pie text-emerald-400"></i>
+                                        <h3 className="text-sm font-bold text-zinc-200 uppercase tracking-wider">Разбор</h3>
+                                    </div>
+                                    <button type="button" onClick={() => setBreakdownOpen(false)} title="Закрыть" className="px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-red-400 hover:border-red-500 transition-colors text-xs"><i className="fas fa-times"></i></button>
+                                </div>
+                                <div className="flex-1 overflow-hidden p-4">
+                                    {breakdownOpen && <BreakdownPanel />}
                                 </div>
                             </div>
                         </div>
