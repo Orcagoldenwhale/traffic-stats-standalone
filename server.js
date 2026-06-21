@@ -558,6 +558,7 @@ app.get('/api/keitaro/breakdown', async (req, res) => {
         const ds = t => new Date(t).toISOString().slice(0, 10);
         const cur = { from: ds(now - W * DAY), to: ds(now - DAY) };            // последние W полных дней
         const prv = { from: ds(now - 2 * W * DAY), to: ds(now - (W + 1) * DAY) }; // предыдущие W дней (тренд)
+        const banWin = { from: ds(now - 30 * DAY), to: ds(now - DAY) };        // бан разбираем за 30д — захватить их работу до бана
         const rep = async (range, dims) => {
             const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
                 method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
@@ -566,7 +567,7 @@ app.get('/api/keitaro/breakdown', async (req, res) => {
             if (!r.ok) throw new Error('Keitaro API ' + r.status);
             return (await r.json()).rows || [];
         };
-        const [curRows, prvRows, offRows] = await Promise.all([rep(cur, ['campaign_id']), rep(prv, ['campaign_id']), rep(cur, ['campaign_id', 'offer'])]);
+        const [curRows, prvRows, offRows, banRows] = await Promise.all([rep(cur, ['campaign_id']), rep(prv, ['campaign_id']), rep(cur, ['campaign_id', 'offer']), rep(banWin, ['campaign_id'])]);
         let links = {}; try { if (existsSync(KEITARO_LINKS_FILE)) links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); } catch (e) { /* ignore */ }
         const id2name = {}; for (const [n, L] of Object.entries(links)) if (L && L.id != null) id2name[L.id] = n;
         const cfg = {};
@@ -579,13 +580,16 @@ app.get('/api/keitaro/breakdown', async (req, res) => {
         const camps = [];
         for (const r of curRows) {
             const nm = id2name[r.campaign_id]; if (!nm) continue;
+            const c = cfg[nm] || {}; const st = c.status || '';
+            if (st !== 'live' && st !== 'ban') continue;   // только боевые + в бане
             const m = mk(r.clicks || 0, r.conversions || 0, r.sales || 0, r.revenue || 0, r.cost || 0);
-            const d = dat[nm] || { imp: 0, kws: [] }; const c = cfg[nm] || {};
+            const d = dat[nm] || { imp: 0, kws: [] };
             let wk = c.pk || ''; if (!wk && d.kws.length) { const t = [...d.kws].sort((a, b) => (b.clicks || 0) - (a.clicks || 0))[0]; wk = t ? t.text : ''; }
             const p = prvById[r.campaign_id]; const pEpc = p && p.clk > 0 ? p.rev / p.clk : 0;
-            camps.push({ name: nm, geo: _extractGeo(nm), dg: _bdIsDG(nm), status: c.status || '', ...m, imp: d.imp, ctr: d.imp > 0 ? m.clk / d.imp * 100 : null, workingKey: wk, offer: (offByCamp[r.campaign_id] || {}).offer || '', trendEpc: pEpc > 0 ? (m.epc / pEpc - 1) * 100 : null });
+            camps.push({ name: nm, geo: _extractGeo(nm), dg: _bdIsDG(nm), status: st, ...m, imp: d.imp, ctr: d.imp > 0 ? m.clk / d.imp * 100 : null, workingKey: wk, offer: (offByCamp[r.campaign_id] || {}).offer || '', trendEpc: pEpc > 0 ? (m.epc / pEpc - 1) * 100 : null });
         }
-        const search = camps.filter(c => !c.dg), dgCamps = camps.filter(c => c.dg);
+        const live = camps.filter(c => c.status === 'live');  // бан разбираем отдельно (30д, ниже)
+        const search = live.filter(c => !c.dg), dgCamps = live.filter(c => c.dg);  // норму/тиры считаем только по боевым Search
         const sum = arr => arr.reduce((a, c) => ({ clk: a.clk + c.clk, reg: a.reg + c.reg, dep: a.dep + c.dep, rev: a.rev + c.rev, cost: a.cost + c.cost }), { clk: 0, reg: 0, dep: 0, rev: 0, cost: 0 });
         const prvGeo = {}; for (const r of prvRows) { const nm = id2name[r.campaign_id]; if (!nm || _bdIsDG(nm)) continue; const g = _extractGeo(nm); if (!prvGeo[g]) prvGeo[g] = { clk: 0, rev: 0 }; prvGeo[g].clk += r.clicks || 0; prvGeo[g].rev += r.revenue || 0; }
         const byGeo = {}; for (const c of search) (byGeo[c.geo] = byGeo[c.geo] || []).push(c);
@@ -606,8 +610,33 @@ app.get('/api/keitaro/breakdown', async (req, res) => {
         }
         geos.sort((a, b) => b.rev - a.rev);
         const dgS = sum(dgCamps); const dgM = mk(dgS.clk, dgS.reg, dgS.dep, dgS.rev, dgS.cost);
-        const tot = sum(camps); const totM = mk(tot.clk, tot.reg, tot.dep, tot.rev, tot.cost);
-        const data = { window: W, cur, prv, benchmark: { crDep: 8, reg2dep: 40, roi: 300 }, totals: totM, geos, demandgen: { ...dgM, n: dgCamps.length, camps: dgCamps.sort((a, b) => b.clk - a.clk) } };
+        const tot = sum(search); const totM = mk(tot.clk, tot.reg, tot.dep, tot.rev, tot.cost);  // ИТОГО = боевые Search
+        // --- Разбор бана за 30д: оценить прошлую работу; на норму/тиры боевых не влияет ---
+        const banCamps = [];
+        for (const r of banRows) {
+            const nm = id2name[r.campaign_id]; if (!nm) continue;
+            const c = cfg[nm] || {}; if (c.status !== 'ban') continue;
+            const m = mk(r.clicks || 0, r.conversions || 0, r.sales || 0, r.revenue || 0, r.cost || 0);
+            const d = dat[nm] || { imp: 0, kws: [] };
+            let wk = c.pk || ''; if (!wk && d.kws.length) { const t = [...d.kws].sort((a, b) => (b.clicks || 0) - (a.clicks || 0))[0]; wk = t ? t.text : ''; }
+            banCamps.push({ name: nm, geo: _extractGeo(nm), dg: _bdIsDG(nm), status: 'ban', ...m, imp: d.imp, ctr: d.imp > 0 ? m.clk / d.imp * 100 : null, workingKey: wk, offer: (offByCamp[r.campaign_id] || {}).offer || '', trendEpc: null });
+        }
+        const banFlag = c => {
+            if (c.cost > 0 && c.roi >= 1.3) return 'green';   // были прибыльны
+            if (c.cost > 0 && c.roi < 1) return 'red';        // сливали
+            if (c.clk >= 30 && c.rev === 0) return 'red';
+            return 'gray';                                     // мало данных / расход не выгружен
+        };
+        const banByGeo = {}; for (const c of banCamps) (banByGeo[c.geo] = banByGeo[c.geo] || []).push(c);
+        const banTotalRev = banCamps.reduce((a, c) => a + c.rev, 0) || 1;
+        const banGeos = [];
+        for (const [geo, list] of Object.entries(banByGeo)) {
+            const s = sum(list); const m = mk(s.clk, s.reg, s.dep, s.rev, s.cost);
+            banGeos.push({ geo, tier: _bdTier(m.roi), n: list.length, ...m, d100: m.epc * 100, sharePct: s.rev / banTotalRev * 100, trendEpc: null, camps: list.map(c => ({ ...c, flag: banFlag(c) })).sort((a, b) => b.rev - a.rev) });
+        }
+        banGeos.sort((a, b) => b.rev - a.rev);
+        const banS = sum(banCamps); const banM = mk(banS.clk, banS.reg, banS.dep, banS.rev, banS.cost);
+        const data = { window: W, cur, prv, benchmark: { crDep: 8, reg2dep: 40, roi: 300 }, totals: totM, geos, demandgen: { ...dgM, n: dgCamps.length, camps: dgCamps.sort((a, b) => b.clk - a.clk) }, banned: { window: 30, from: banWin.from, to: banWin.to, ...banM, n: banCamps.length, geos: banGeos } };
         _breakdownCache.set(W, { at: Date.now(), data });
         res.json(data);
     } catch (e) {
