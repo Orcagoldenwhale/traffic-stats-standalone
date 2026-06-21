@@ -542,6 +542,80 @@ app.get('/api/keitaro/offers', async (req, res) => {
     }
 });
 
+// === «Разбор»: норма по гео + кампании vs норма + рабочие ключи + тренд (admin) ===
+// Источники: Keitaro (clicks/conversions=рега/sales=деп/revenue/cost) + наш кэш (связи,
+// статус+рабочий ключ из конфигов, показы/ключи из data). Google-таблицы НЕ читаем.
+function _bdTier(roi) { if (roi >= 2) return 'T1'; if (roi >= 1.3) return 'T2'; if (roi >= 1) return 'T3'; return 'low'; }
+const _bdIsDG = n => /demandgen/i.test(n || '');
+const _breakdownCache = new Map(); // window -> { at, data }
+app.get('/api/keitaro/breakdown', async (req, res) => {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
+    let W = parseInt(req.query.window, 10); if (![1, 7, 14].includes(W)) W = 7;
+    try {
+        const hit = _breakdownCache.get(W);
+        if (hit && Date.now() - hit.at < 10 * 60 * 1000) return res.json(hit.data);
+        const DAY = 86400000, now = Date.now();
+        const ds = t => new Date(t).toISOString().slice(0, 10);
+        const cur = { from: ds(now - W * DAY), to: ds(now - DAY) };            // последние W полных дней
+        const prv = { from: ds(now - 2 * W * DAY), to: ds(now - (W + 1) * DAY) }; // предыдущие W дней (тренд)
+        const rep = async (range, dims) => {
+            const r = await fetch(`${KEITARO_URL}/admin_api/v1/report/build`, {
+                method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ range: { from: range.from, to: range.to, timezone: 'Europe/Moscow' }, dimensions: dims, measures: ['clicks', 'conversions', 'sales', 'revenue', 'cost'] })
+            });
+            if (!r.ok) throw new Error('Keitaro API ' + r.status);
+            return (await r.json()).rows || [];
+        };
+        const [curRows, prvRows, offRows] = await Promise.all([rep(cur, ['campaign_id']), rep(prv, ['campaign_id']), rep(cur, ['campaign_id', 'offer'])]);
+        let links = {}; try { if (existsSync(KEITARO_LINKS_FILE)) links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); } catch (e) { /* ignore */ }
+        const id2name = {}; for (const [n, L] of Object.entries(links)) if (L && L.id != null) id2name[L.id] = n;
+        const cfg = {};
+        for (const f of [TRAFFIC_FILE, TRAFFIC_ADMIN_FILE]) { try { if (existsSync(f)) for (const c of JSON.parse(await readFile(f, 'utf-8'))) if (c && c.name) cfg[c.name] = { status: (c.customStatus || '').toLowerCase(), pk: (c.primaryKeyword || '').trim() }; } catch (e) { /* ignore */ } }
+        const dat = {};
+        for (const f of [TRAFFIC_DATA_FILE, TRAFFIC_ADMIN_DATA_FILE]) { try { if (existsSync(f)) { const d = JSON.parse(await readFile(f, 'utf-8')).data || {}; for (const v of Object.values(d)) { const cn = v.customName; if (!cn) continue; dat[cn] = { imp: ((v.stats || {}).allTime || {}).impressions || 0, kws: v.keywords || [] }; } } } catch (e) { /* ignore */ } }
+        const offByCamp = {}; for (const r of offRows) { const rev = r.revenue || 0; if (!offByCamp[r.campaign_id] || rev > offByCamp[r.campaign_id].rev) offByCamp[r.campaign_id] = { offer: r.offer, rev }; }
+        const prvById = {}; for (const r of prvRows) prvById[r.campaign_id] = { clk: r.clicks || 0, rev: r.revenue || 0 };
+        const mk = (clk, reg, dep, rev, cost) => ({ clk, reg, dep, rev, cost, roi: cost > 0 ? rev / cost : 0, prof: rev - cost, epc: clk > 0 ? rev / clk : 0, crReg: clk > 0 ? reg / clk * 100 : 0, crDep: clk > 0 ? dep / clk * 100 : 0, reg2dep: reg > 0 ? dep / reg * 100 : 0, cpc: clk > 0 ? cost / clk : 0, cpl: reg > 0 ? cost / reg : 0, cpd: dep > 0 ? cost / dep : 0, payoutDep: dep > 0 ? rev / dep : 0 });
+        const camps = [];
+        for (const r of curRows) {
+            const nm = id2name[r.campaign_id]; if (!nm) continue;
+            const m = mk(r.clicks || 0, r.conversions || 0, r.sales || 0, r.revenue || 0, r.cost || 0);
+            const d = dat[nm] || { imp: 0, kws: [] }; const c = cfg[nm] || {};
+            let wk = c.pk || ''; if (!wk && d.kws.length) { const t = [...d.kws].sort((a, b) => (b.clicks || 0) - (a.clicks || 0))[0]; wk = t ? t.text : ''; }
+            const p = prvById[r.campaign_id]; const pEpc = p && p.clk > 0 ? p.rev / p.clk : 0;
+            camps.push({ name: nm, geo: _extractGeo(nm), dg: _bdIsDG(nm), status: c.status || '', ...m, imp: d.imp, ctr: d.imp > 0 ? m.clk / d.imp * 100 : null, workingKey: wk, offer: (offByCamp[r.campaign_id] || {}).offer || '', trendEpc: pEpc > 0 ? (m.epc / pEpc - 1) * 100 : null });
+        }
+        const search = camps.filter(c => !c.dg), dgCamps = camps.filter(c => c.dg);
+        const sum = arr => arr.reduce((a, c) => ({ clk: a.clk + c.clk, reg: a.reg + c.reg, dep: a.dep + c.dep, rev: a.rev + c.rev, cost: a.cost + c.cost }), { clk: 0, reg: 0, dep: 0, rev: 0, cost: 0 });
+        const prvGeo = {}; for (const r of prvRows) { const nm = id2name[r.campaign_id]; if (!nm || _bdIsDG(nm)) continue; const g = _extractGeo(nm); if (!prvGeo[g]) prvGeo[g] = { clk: 0, rev: 0 }; prvGeo[g].clk += r.clicks || 0; prvGeo[g].rev += r.revenue || 0; }
+        const byGeo = {}; for (const c of search) (byGeo[c.geo] = byGeo[c.geo] || []).push(c);
+        const totalRev = search.reduce((a, c) => a + c.rev, 0) || 1;
+        const geos = [];
+        for (const [geo, list] of Object.entries(byGeo)) {
+            const s = sum(list); const m = mk(s.clk, s.reg, s.dep, s.rev, s.cost); const normEpc = m.epc;
+            const pg = prvGeo[geo]; const pEpc = pg && pg.clk > 0 ? pg.rev / pg.clk : 0;
+            const flag = c => {
+                if (c.clk >= 30 && c.rev === 0) return 'red';
+                if (c.cost > 0 && c.roi < 1) return 'red';
+                if (c.dep > 0 && c.cpd > c.payoutDep) return 'red';
+                if (normEpc > 0 && c.epc < normEpc * 0.7) return 'red';
+                if (normEpc > 0 && c.epc > normEpc * 1.3) return 'green';
+                return 'gray';
+            };
+            geos.push({ geo, tier: _bdTier(m.roi), n: list.length, ...m, d100: m.epc * 100, sharePct: s.rev / totalRev * 100, trendEpc: pEpc > 0 ? (m.epc / pEpc - 1) * 100 : null, camps: list.map(c => ({ ...c, flag: flag(c) })).sort((a, b) => b.rev - a.rev) });
+        }
+        geos.sort((a, b) => b.rev - a.rev);
+        const dgS = sum(dgCamps); const dgM = mk(dgS.clk, dgS.reg, dgS.dep, dgS.rev, dgS.cost);
+        const tot = sum(camps); const totM = mk(tot.clk, tot.reg, tot.dep, tot.rev, tot.cost);
+        const data = { window: W, cur, prv, benchmark: { crDep: 8, reg2dep: 40, roi: 300 }, totals: totM, geos, demandgen: { ...dgM, n: dgCamps.length, camps: dgCamps.sort((a, b) => b.clk - a.clk) } };
+        _breakdownCache.set(W, { at: Date.now(), data });
+        res.json(data);
+    } catch (e) {
+        console.error('[Keitaro] breakdown failed:', e.message);
+        res.status(502).json({ error: e.message });
+    }
+});
+
 // Pre-warm stats on startup + keep warm so the "Кампании" tab loads instantly.
 if (KEITARO_URL && KEITARO_TOKEN) {
     setTimeout(() => { loadKeitaroStats().then(() => console.log('[Keitaro] stats pre-warmed')).catch(e => console.error('[Keitaro] pre-warm failed:', e.message)); }, 8000);
