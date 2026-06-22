@@ -1857,44 +1857,47 @@ function ensureSharing(sheetId, props) {
                     <thead className="text-zinc-500 text-[10px] uppercase sticky top-0 bg-zinc-900">
                         <tr className="text-left border-b border-zinc-800">
                             <th className="py-1 pr-2">Гео / кампания</th>
-                            <th className="text-right" title="Клики за период (Keitaro)">клики</th>
-                            <th className="text-right" title="Расход (Keitaro). По забаненным после бана не выгружается.">расход</th>
-                            <th className="text-right" title="Доход (Keitaro)">доход</th>
-                            <th className="text-right" title="профит = доход − расход">профит</th>
-                            <th className="text-right" title="ROI = доход ÷ расход × 100%">ROI</th>
-                            <th className="text-right" title="$/100 = доход ÷ клики × 100 (EPC×100) — деньги со 100 кликов.">$/100</th>
-                            {!isBan && <th className="text-right" title="Тренд EPC: текущее окно vs предыдущее равное (▲ рост / ▼ спад)">EPC↗</th>}
-                            <th className="text-right" title="Депозиты (sales в Keitaro)">деп</th>
+                            <th className="text-right pl-4" title="Клики за период (Keitaro)">клики</th>
+                            <th className="text-right pl-4" title="Расход (Keitaro). По забаненным после бана не выгружается.">расход</th>
+                            <th className="text-right pl-4" title="Доход (Keitaro)">доход</th>
+                            <th className="text-right pl-4" title="профит = доход − расход">профит</th>
+                            <th className="text-right pl-4" title="ROI = доход ÷ расход × 100%">ROI</th>
+                            <th className="text-right pl-4" title="$/100 = доход ÷ клики × 100 (EPC×100) — деньги со 100 кликов.">$/100</th>
+                            {!isBan && <th className="text-right pl-4" title="Тренд EPC: текущее окно vs предыдущее равное (▲ рост / ▼ спад)">EPC↗</th>}
+                            <th className="text-right pl-4" title="Депозиты (sales в Keitaro)">деп</th>
+                            <th className="w-full"></th>
                         </tr>
                     </thead>
                     <tbody>
                         {geos.map(g => (
                             <React.Fragment key={g.geo}>
                                 <tr className={`border-b border-zinc-800/60 cursor-pointer hover:bg-zinc-800/40 ${roiRowTint(g.roi, g.cost)}`} onClick={() => toggleFn(g.geo)} title={geoTitle(g)}>
-                                    <td className="py-1.5 pr-2 text-zinc-200 font-medium"><i className={`fas fa-chevron-${openState[g.geo] ? 'down' : 'right'} text-[8px] mr-1.5 text-zinc-600`}></i>{g.geo} <span className="text-zinc-600 text-[10px]">({g.n})</span></td>
-                                    <td className="text-right text-zinc-400">{g.clk}</td>
-                                    <td className="text-right text-zinc-400">{money(g.cost)}</td>
-                                    <td className="text-right text-zinc-200">{money(g.rev)}</td>
-                                    <td className={`text-right font-medium ${g.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(g.prof)}</td>
-                                    <td className={`text-right font-bold ${roiColor(g.roi, g.cost)}`}>{g.cost > 0 ? pct(g.roi * 100) : '—'}</td>
-                                    <td className="text-right text-zinc-200">{money(g.d100)}</td>
-                                    {!isBan && <td className="text-right">{trendEl(g.trendEpc)}</td>}
-                                    <td className="text-right text-zinc-400">{g.dep}</td>
+                                    <td className="py-1 pr-2 text-zinc-200 font-medium whitespace-nowrap"><i className={`fas fa-chevron-${openState[g.geo] ? 'down' : 'right'} text-[8px] mr-1.5 text-zinc-600`}></i>{g.geo} <span className="text-zinc-600 text-[10px]">({g.n})</span></td>
+                                    <td className="text-right pl-4 text-zinc-400">{g.clk}</td>
+                                    <td className="text-right pl-4 text-zinc-400">{money(g.cost)}</td>
+                                    <td className="text-right pl-4 text-zinc-200">{money(g.rev)}</td>
+                                    <td className={`text-right pl-4 font-medium ${g.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(g.prof)}</td>
+                                    <td className={`text-right pl-4 font-bold ${roiColor(g.roi, g.cost)}`}>{g.cost > 0 ? pct(g.roi * 100) : '—'}</td>
+                                    <td className="text-right pl-4 text-zinc-200">{money(g.d100)}</td>
+                                    {!isBan && <td className="text-right pl-4">{trendEl(g.trendEpc)}</td>}
+                                    <td className="text-right pl-4 text-zinc-400">{g.dep}</td>
+                                    <td className="w-full"></td>
                                 </tr>
                                 {openState[g.geo] && g.camps.map(c => (
                                     <tr key={c.name} className={`text-[11px] ${roiRowTint(c.roi, c.cost)}`} title={campTitle(c)}>
-                                        <td className="py-1 pl-5 pr-2">
+                                        <td className="py-0.5 pl-5 pr-2">
                                             <div className="text-zinc-300">{roiDot(c.roi, c.cost)} {c.name} {!isBan && normMark(g, c)}</div>
                                             {c.workingKey && <div className="text-[10px] text-zinc-500 pl-4 truncate max-w-[260px]">🔑 {c.workingKey}{c.offer ? ' → ' + c.offer : ''}</div>}
                                         </td>
-                                        <td className="text-right text-zinc-400">{c.clk}</td>
-                                        <td className="text-right text-zinc-500">{money(c.cost)}</td>
-                                        <td className="text-right text-zinc-200">{money(c.rev)}</td>
-                                        <td className={`text-right ${c.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(c.prof)}</td>
-                                        <td className={`text-right ${roiColor(c.roi, c.cost)}`}>{c.cost > 0 ? pct(c.roi * 100) : '—'}</td>
-                                        <td className="text-right">{money(c.epc * 100)}</td>
-                                        {!isBan && <td className="text-right">{trendEl(c.trendEpc)}</td>}
-                                        <td className="text-right text-zinc-400">{c.dep}</td>
+                                        <td className="text-right pl-4 text-zinc-400">{c.clk}</td>
+                                        <td className="text-right pl-4 text-zinc-500">{money(c.cost)}</td>
+                                        <td className="text-right pl-4 text-zinc-200">{money(c.rev)}</td>
+                                        <td className={`text-right pl-4 ${c.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(c.prof)}</td>
+                                        <td className={`text-right pl-4 ${roiColor(c.roi, c.cost)}`}>{c.cost > 0 ? pct(c.roi * 100) : '—'}</td>
+                                        <td className="text-right pl-4">{money(c.epc * 100)}</td>
+                                        {!isBan && <td className="text-right pl-4">{trendEl(c.trendEpc)}</td>}
+                                        <td className="text-right pl-4 text-zinc-400">{c.dep}</td>
+                                        <td className="w-full"></td>
                                     </tr>
                                 ))}
                             </React.Fragment>
