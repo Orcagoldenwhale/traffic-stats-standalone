@@ -519,6 +519,27 @@ app.get('/api/keitaro/stats', async (req, res) => {
 
 // Offers per campaign (on-demand for the expand panel, cached per campaign)
 const keitaroOffersCache = new Map();
+const keitaroOfferNameCache = new Map();  // offer_id -> name (имена офферов почти не меняются)
+// Текущая привязка кампании: офферы из активных стримов -> [{id, name}]
+async function keitaroAssignedOffers(campaignId) {
+    const sr = await fetch(`${KEITARO_URL}/admin_api/v1/campaigns/${campaignId}/streams`, { headers: { 'Api-Key': KEITARO_TOKEN } });
+    if (!sr.ok) return [];
+    const streams = await sr.json();
+    const ids = new Set();
+    for (const s of (Array.isArray(streams) ? streams : [])) {
+        if (s.state && s.state !== 'active') continue;          // только активные стримы
+        for (const o of (s.offers || [])) if (o.offer_id != null) ids.add(o.offer_id);
+    }
+    const out = [];
+    for (const oid of ids) {
+        if (keitaroOfferNameCache.has(oid)) { out.push({ id: oid, name: keitaroOfferNameCache.get(oid) }); continue; }
+        try {
+            const or = await fetch(`${KEITARO_URL}/admin_api/v1/offers/${oid}`, { headers: { 'Api-Key': KEITARO_TOKEN } });
+            if (or.ok) { const o = await or.json(); const nm = (o.name || '').trim(); keitaroOfferNameCache.set(oid, nm); out.push({ id: oid, name: nm }); }
+        } catch (e) { /* ignore */ }
+    }
+    return out;
+}
 app.get('/api/keitaro/offers', async (req, res) => {
     if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
     const id = parseInt(req.query.id, 10);
@@ -533,7 +554,17 @@ app.get('/api/keitaro/offers', async (req, res) => {
         });
         if (!r.ok) return res.status(502).json({ error: `Keitaro API ${r.status}` });
         const j = await r.json();
-        const offers = (j.rows || []).map(row => ({ offer: row.offer, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0, clicks: row.clicks || 0 }));
+        const offers = (j.rows || []).map(row => ({ offer: row.offer, revenue: row.revenue || 0, conversions: row.conversions || 0, sales: row.sales || 0, clicks: row.clicks || 0, active: false }));
+        // текущая привязка: пометить активные + добавить назначенные офферы без трафика
+        let assigned = [];
+        try { assigned = await keitaroAssignedOffers(id); } catch (e) { /* без меток, не ломаем выдачу */ }
+        const nrm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        for (const a of assigned) {
+            const hit = offers.find(o => nrm(o.offer) === nrm(a.name));
+            if (hit) hit.active = true;
+            else offers.push({ offer: a.name, revenue: 0, conversions: 0, sales: 0, clicks: 0, active: true });
+        }
+        offers.sort((x, y) => (Number(y.active) - Number(x.active)) || (y.revenue - x.revenue));  // активные сверху, затем по доходу
         keitaroOffersCache.set(id, { at: Date.now(), offers });
         res.json({ offers });
     } catch (e) {
