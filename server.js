@@ -710,7 +710,8 @@ function keitaroLocalDate(ms) {
     return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
-// Push the snapshot day's spend for every linked campaign into Keitaro via update_costs (Europe/Moscow window).
+// Push each linked campaign's REAL daily spend into Keitaro via update_costs.
+// Расход за день = прирост allTime за сутки (allTime не обнуляется -> не зависит от таймзоны кампании).
 async function runKeitaroCostExport(trigger) {
     if (!KEITARO_URL || !KEITARO_TOKEN) return { ok: false, error: 'Keitaro не настроен' };
     if (keitaroExportRunning) return { ok: false, error: 'Уже выполняется' };
@@ -724,19 +725,45 @@ async function runKeitaroCostExport(trigger) {
             try { if (existsSync(cf)) { for (const c of JSON.parse(await readFile(cf, 'utf-8'))) { if (c && (c.customStatus || '').toLowerCase() === 'ban') bannedSet.add(c.name); } } } catch (e) { /* ignore */ }
         }
         let snapAt = null;
-        const costByName = {};
+        const allNow = {};   // customName -> allTime.cost (текущий снимок)
+        const todayNow = {}; // customName -> today.cost (fallback для кампаний без вчерашней базы)
         for (const f of [TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE, TRAFFIC_DATA_SNAPSHOT_FILE]) {
             if (!existsSync(f)) continue;
             const d = JSON.parse(await readFile(f, 'utf-8'));
             if (d.snapshotAt && !snapAt) snapAt = d.snapshotAt;
             for (const v of Object.values(d.data || {})) {
                 const cn = v.customName; if (!cn) continue;
-                const c = (v.stats && v.stats.today && +v.stats.today.cost) || 0;
-                if (costByName[cn] == null || c > costByName[cn]) costByName[cn] = c; // max across datasets
+                const at = (v.stats && v.stats.allTime && +v.stats.allTime.cost) || 0;
+                const td = (v.stats && v.stats.today && +v.stats.today.cost) || 0;
+                if (allNow[cn] == null || at > allNow[cn]) allNow[cn] = at; // max across datasets
+                if (todayNow[cn] == null || td > todayNow[cn]) todayNow[cn] = td;
             }
         }
         if (!snapAt) return { ok: false, error: 'Нет снапшота' };
         const day = keitaroLocalDate(new Date(snapAt).getTime());
+
+        // Реальный дневной расход = прирост allTime за сутки (день снимка минус вчерашний архив).
+        const prevDay = keitaroLocalDate(new Date(snapAt).getTime() - 86400000);
+        const allPrev = {};
+        for (const an of ['traffic_admin_data.json', 'traffic_data.json']) {
+            const af = join(SNAPSHOT_ARCHIVE_DIR, prevDay, an);
+            if (!existsSync(af)) continue;
+            try {
+                const ad = JSON.parse(await readFile(af, 'utf-8'));
+                for (const v of Object.values(ad.data || {})) {
+                    const cn = v.customName; if (!cn) continue;
+                    const at = (v.stats && v.stats.allTime && +v.stats.allTime.cost) || 0;
+                    if (allPrev[cn] == null || at > allPrev[cn]) allPrev[cn] = at;
+                }
+            } catch (e) { /* битый архив игнорируем — упадём на fallback today.cost */ }
+        }
+        const costByName = {};
+        for (const cn of Object.keys(allNow)) {
+            const prev = allPrev[cn];
+            if (prev == null) { costByName[cn] = todayNow[cn] || 0; continue; } // нет вчерашней базы -> today.cost
+            const delta = allNow[cn] - prev;
+            costByName[cn] = delta > 0 ? delta : 0; // откат/глюк allTime -> 0 (не шлём минус)
+        }
 
         const byId = {};
         for (const [cn, link] of Object.entries(links)) {

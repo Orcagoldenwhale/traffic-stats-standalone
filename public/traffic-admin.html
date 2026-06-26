@@ -1498,7 +1498,7 @@ function ensureSharing(sheetId, props) {
                                     className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 outline-none focus:border-cyan-600" />
                             </div>
                             <div className="text-[10px] text-zinc-500 mb-3 leading-snug">
-                                Каждый день в {cfg.time || '10:00'} расход за <b className="text-zinc-400">вчера</b> заливается в Keitaro по всем связанным кампаниям (tz Москва).
+                                Каждый день в {cfg.time || '10:00'} в Keitaro заливается <b className="text-zinc-400">реальный расход за вчера</b> по всем связанным кампаниям — считается как прирост за полные сутки (allTime), поэтому не зависит от часового пояса кампании. (tz Москва).
                             </div>
                             <button type="button" onClick={runNow} disabled={busy}
                                 className="w-full mb-2 px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-2">
