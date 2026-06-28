@@ -1838,6 +1838,7 @@ function ensureSharing(sheetId, props) {
             const money = n => '$' + Math.round(n || 0).toLocaleString('ru-RU');
             const pct = n => (n == null ? '—' : Math.round(n) + '%');
             const f1 = n => (n == null ? '—' : (+n).toFixed(1));
+            const epc1 = n => '$' + (+n || 0).toFixed(2);
             const trendEl = t => t == null ? <span className="text-zinc-600">—</span> : <span className={t >= 0 ? 'text-green-400' : 'text-red-400'}>{t >= 0 ? '▲' : '▼'}{Math.abs(Math.round(t))}%</span>;
             const roiColor = (roi, cost) => cost <= 0 ? 'text-zinc-500' : roi >= 1.3 ? 'text-green-400' : roi >= 1 ? 'text-amber-400' : 'text-red-400';
             const roiRowTint = (roi, cost) => cost <= 0 ? '' : roi >= 1.3 ? 'bg-green-500/10' : roi >= 1 ? 'bg-amber-500/10' : 'bg-red-500/10';
@@ -1863,6 +1864,7 @@ function ensureSharing(sheetId, props) {
                             <th className="text-right pl-4" title="профит = доход − расход">профит</th>
                             <th className="text-right pl-4" title="ROI = доход ÷ расход × 100%">ROI</th>
                             <th className="text-right pl-4" title="$/100 = доход ÷ клики × 100 (EPC×100) — деньги со 100 кликов.">$/100</th>
+                            <th className="text-right pl-4" title="EPC = доход ÷ клики (доход с одного клика)">EPC</th>
                             {!isBan && <th className="text-right pl-4" title="Тренд EPC: текущее окно vs предыдущее равное (▲ рост / ▼ спад)">EPC↗</th>}
                             <th className="text-right pl-4" title="Реги / конверсии (conversions в Keitaro)">рега</th>
                             <th className="text-right pl-4" title="Депозиты (sales в Keitaro)">деп</th>
@@ -1880,6 +1882,7 @@ function ensureSharing(sheetId, props) {
                                     <td className={`text-right pl-4 font-medium ${g.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(g.prof)}</td>
                                     <td className={`text-right pl-4 font-bold ${roiColor(g.roi, g.cost)}`}>{g.cost > 0 ? pct(g.roi * 100) : '—'}</td>
                                     <td className="text-right pl-4 text-zinc-200">{money(g.d100)}</td>
+                                    <td className="text-right pl-4 text-zinc-400">{epc1(g.epc)}</td>
                                     {!isBan && <td className="text-right pl-4">{trendEl(g.trendEpc)}</td>}
                                     <td className="text-right pl-4 text-zinc-400">{g.reg}</td>
                                     <td className="text-right pl-4 text-zinc-400">{g.dep}</td>
@@ -1897,6 +1900,7 @@ function ensureSharing(sheetId, props) {
                                         <td className={`text-right pl-4 ${c.prof >= 0 ? 'text-green-400' : 'text-red-400'}`}>{money(c.prof)}</td>
                                         <td className={`text-right pl-4 ${roiColor(c.roi, c.cost)}`}>{c.cost > 0 ? pct(c.roi * 100) : '—'}</td>
                                         <td className="text-right pl-4">{money(c.epc * 100)}</td>
+                                        <td className="text-right pl-4 text-zinc-400">{epc1(c.epc)}</td>
                                         {!isBan && <td className="text-right pl-4">{trendEl(c.trendEpc)}</td>}
                                         <td className="text-right pl-4 text-zinc-400">{c.reg}</td>
                                         <td className="text-right pl-4 text-zinc-400">{c.dep}</td>
