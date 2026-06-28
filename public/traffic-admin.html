@@ -1864,6 +1864,7 @@ function ensureSharing(sheetId, props) {
                             <th className="text-right pl-4" title="ROI = доход ÷ расход × 100%">ROI</th>
                             <th className="text-right pl-4" title="$/100 = доход ÷ клики × 100 (EPC×100) — деньги со 100 кликов.">$/100</th>
                             {!isBan && <th className="text-right pl-4" title="Тренд EPC: текущее окно vs предыдущее равное (▲ рост / ▼ спад)">EPC↗</th>}
+                            <th className="text-right pl-4" title="Реги / конверсии (conversions в Keitaro)">рега</th>
                             <th className="text-right pl-4" title="Депозиты (sales в Keitaro)">деп</th>
                             <th className="w-full"></th>
                         </tr>
@@ -1880,6 +1881,7 @@ function ensureSharing(sheetId, props) {
                                     <td className={`text-right pl-4 font-bold ${roiColor(g.roi, g.cost)}`}>{g.cost > 0 ? pct(g.roi * 100) : '—'}</td>
                                     <td className="text-right pl-4 text-zinc-200">{money(g.d100)}</td>
                                     {!isBan && <td className="text-right pl-4">{trendEl(g.trendEpc)}</td>}
+                                    <td className="text-right pl-4 text-zinc-400">{g.reg}</td>
                                     <td className="text-right pl-4 text-zinc-400">{g.dep}</td>
                                     <td className="w-full"></td>
                                 </tr>
@@ -1896,6 +1898,7 @@ function ensureSharing(sheetId, props) {
                                         <td className={`text-right pl-4 ${roiColor(c.roi, c.cost)}`}>{c.cost > 0 ? pct(c.roi * 100) : '—'}</td>
                                         <td className="text-right pl-4">{money(c.epc * 100)}</td>
                                         {!isBan && <td className="text-right pl-4">{trendEl(c.trendEpc)}</td>}
+                                        <td className="text-right pl-4 text-zinc-400">{c.reg}</td>
                                         <td className="text-right pl-4 text-zinc-400">{c.dep}</td>
                                         <td className="w-full"></td>
                                     </tr>
