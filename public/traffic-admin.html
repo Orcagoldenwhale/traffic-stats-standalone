@@ -1857,7 +1857,7 @@ function ensureSharing(sheetId, props) {
                 <table className="w-full">
                     <thead className="text-zinc-500 text-[10px] uppercase sticky top-0 bg-zinc-900">
                         <tr className="text-left border-b border-zinc-800">
-                            <th className="py-1 pr-2">Гео / кампания</th>
+                            <th className="py-1 pr-2 min-w-[340px]">Гео / кампания</th>
                             <th className="text-right pl-4" title="Клики за период (Keitaro)">клики</th>
                             <th className="text-right pl-4" title="Расход (Keitaro). По забаненным после бана не выгружается.">расход</th>
                             <th className="text-right pl-4" title="Доход (Keitaro)">доход</th>
@@ -1892,7 +1892,7 @@ function ensureSharing(sheetId, props) {
                                     <tr key={c.name} className={`text-[11px] ${roiRowTint(c.roi, c.cost)}`} title={campTitle(c)}>
                                         <td className="py-0.5 pl-5 pr-2">
                                             <div className="text-zinc-300">{roiDot(c.roi, c.cost)} {c.name} {!isBan && normMark(g, c)}</div>
-                                            {c.workingKey && <div className="text-[10px] text-zinc-500 pl-4 truncate max-w-[260px]">🔑 {c.workingKey}{c.offer ? ' → ' + c.offer : ''}</div>}
+                                            {c.workingKey && <div className="text-[10px] text-zinc-500 pl-4 truncate max-w-[320px]">🔑 {c.workingKey}{c.offer ? ' → ' + c.offer : ''}</div>}
                                         </td>
                                         <td className="text-right pl-4 text-zinc-400">{c.clk}</td>
                                         <td className="text-right pl-4 text-zinc-500">{money(c.cost)}</td>
