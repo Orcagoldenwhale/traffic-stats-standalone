@@ -2220,6 +2220,7 @@ function ensureSharing(sheetId, props) {
             const [copiedNew, setCopiedNew] = useState(false);
             const [isSavingOrder, setIsSavingOrder] = useState(false);
             const [showYesterday, setShowYesterday] = useState(false);
+            const [hideZeroSpend, setHideZeroSpend] = useState(false); // ВРЕМЕННО: скрыть кампании с нулевым спендом за всё время (one-time)
             const [snapshotAt, setSnapshotAt] = useState(null);
             const isSnapshotMode = useRef(false);
 
@@ -2675,6 +2676,9 @@ function ensureSharing(sheetId, props) {
 
             const filteredCampaigns = (() => {
                 let result = campaigns.filter(c => statusFilter.includes(c.customStatus || 'warmup'));
+                if (hideZeroSpend) {
+                    result = result.filter(c => (Number(c.stats && c.stats.allTime && c.stats.allTime.cost) || 0) > 0);
+                }
                 if (searchFilter.trim()) {
                     const q = searchFilter.toLowerCase().replace(/\s+/g, '');
                     result = result.filter(c => {
@@ -2889,6 +2893,11 @@ function ensureSharing(sheetId, props) {
                                     </div>
                                 )}
                             </div>
+                            <button onClick={() => setHideZeroSpend(v => !v)}
+                                className={`px-2 py-1.5 rounded border text-xs transition-colors flex items-center gap-1.5 ${hideZeroSpend ? 'border-amber-500 text-amber-400 bg-amber-500/10' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300 bg-zinc-900'}`}
+                                title="Временно скрыть кампании с нулевым спендом за всё время">
+                                <i className="fas fa-eye-slash text-[10px]"></i>
+                            </button>
                             {!showYesterday ? (
                                 <button
                                     onClick={handleShowYesterday}
