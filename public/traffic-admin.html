@@ -2450,7 +2450,7 @@ function ensureSharing(sheetId, props) {
 
                         const impressionsStale = !!campData.impressionsStale;
 
-                        const luMs = campData.sheetLastUpdated ? new Date(campData.sheetLastUpdated).getTime() : NaN;
+                        const luMs = campData.lastReadAt ? new Date(campData.lastReadAt).getTime() : NaN; // свежесть по lastReadAt (sheetLastUpdated в таблице застыл)
                         const luValid = !isNaN(luMs);
 
                         finalData.push({
