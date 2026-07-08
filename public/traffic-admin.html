@@ -564,7 +564,7 @@
                                         </span>
                                     </React.Fragment>
                                 )}
-                                {data.isStale && (
+                                {data.isStale && data.customStatus !== 'ban' && (
                                     <span className="flex items-center gap-1 text-yellow-400" title="⚠️ Таблица Google не обновлялась больше 3 часов. Проверьте, работает ли скрипт в Google Ads.">
                                         <i className="fas fa-exclamation-triangle text-[10px]"></i>
                                         <span className="text-[9px]">Таблица не обновилась</span>
