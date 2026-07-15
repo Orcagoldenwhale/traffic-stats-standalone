@@ -3570,6 +3570,123 @@ app.get('/api/dg/script', (req, res) => {
     res.type('text/plain').send(code);
 });
 
+// --- DG отправщик конверсий (поллер): Keitaro -> web-app приёмника, ТОЛЬКО через прокси ---
+// Раз в ~10 мин: для каждой DG-кампании (dg:true + webAppUrl) берёт свежие конверсии из
+// Keitaro, фильтрует по Деп/Рега, шлёт НОВЫЕ (не отправленные ранее) POST'ом в приёмник
+// через DG-прокси. Приёмник дедупит по gclid|time, так что повтор безопасен.
+const TRAFFIC_DG_SENT_FILE = join(__dirname, 'saved_sessions', '_traffic_dg_sent.json');
+let _dgSent = null;               // { campaignName: { "gclid|time": tsMs } }
+async function loadDgSent() {
+    if (_dgSent) return _dgSent;
+    _dgSent = {};
+    try { if (existsSync(TRAFFIC_DG_SENT_FILE)) _dgSent = JSON.parse(await readFile(TRAFFIC_DG_SENT_FILE, 'utf-8')) || {}; }
+    catch (e) { _dgSent = {}; }
+    return _dgSent;
+}
+async function saveDgSent() {
+    const tmp = TRAFFIC_DG_SENT_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+    await writeFile(tmp, JSON.stringify(_dgSent, null, 2), 'utf-8');
+    await rename(tmp, TRAFFIC_DG_SENT_FILE);
+}
+// POST в web-app приёмника через DG-прокси. Apps Script на POST отдаёт 302 -> следуем (-L).
+// Тело шлём через stdin (--data-binary @-), чтобы токен не светился в списке процессов.
+function dgPostReceiver(url, payload, timeoutMs = 25000) {
+    return new Promise((resolve) => {
+        const { hostPort, auth } = dgProxy();
+        if (!hostPort) return resolve({ ok: false, status: 0, body: '' });
+        // ВАЖНО: без -X POST. --data-binary делает POST для /exec, а на 302 Apps Script
+        // curl штатно понижает до GET (googleusercontent отдаёт результат doPost по GET).
+        // -X POST форсировал бы POST и на редиректе -> сломанная доставка.
+        const args = ['-sL', '--max-time', String(Math.max(5, Math.ceil(timeoutMs / 1000))), '-x', hostPort];
+        if (auth) args.push('-U', auth);
+        args.push('-H', 'Content-Type: application/json', '--data-binary', '@-', '-w', '\\n%{http_code}', url);
+        let child;
+        try {
+            child = execFile('curl', args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+                if (err) return resolve({ ok: false, status: 0, body: '' });
+                const nl = (stdout || '').lastIndexOf('\n');
+                const code = nl >= 0 ? (parseInt(stdout.slice(nl + 1), 10) || 0) : 0;
+                const body = nl >= 0 ? stdout.slice(0, nl) : stdout;
+                resolve({ ok: code >= 200 && code < 300, status: code, body });
+            });
+        } catch (e) { return resolve({ ok: false, status: 0, body: '' }); }
+        try { child.stdin.write(JSON.stringify(payload)); child.stdin.end(); } catch (e) { /* ignore */ }
+    });
+}
+// Свежие конверсии кампании из Keitaro (окно 3 дня). -> [{gclid,time,type}].
+async function dgFetchConversions(cid) {
+    const now = Date.now(), DAY = 86400000;
+    const body = { range: { from: new Date(now - 3 * DAY).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10), timezone: 'Europe/Moscow' }, limit: 200, sort: [{ name: 'postback_datetime', order: 'desc' }], filters: [{ name: 'campaign_id', operator: 'EQUALS', expression: String(cid) }] };
+    const r = await fetch(`${KEITARO_URL}/admin_api/v1/conversions/log`, { method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error('Keitaro ' + r.status);
+    const j = await r.json();
+    return (j.rows || []).filter(row => (row.external_id || '').length > 10).map(row => ({
+        gclid: row.external_id,
+        time: row.postback_datetime || row.click_datetime || '',
+        type: (row.status === 'sale') ? 'деп' : 'рега'
+    }));
+}
+let _dgSendLock = false;
+async function runDgSendCycle() {
+    if (_dgSendLock) return;
+    if (!KEITARO_URL || !KEITARO_TOKEN) return;
+    if (!(dgSettings.proxy || '').trim()) return;                 // прокси не настроен — DG молчит
+    _dgSendLock = true;
+    try {
+        // Гейт: DG работает ТОЛЬКО через прокси. Прокси лёг — «деманд не пашет», цикл пропускаем.
+        const pc = await checkBuyerProxy(dgSettings.proxy.trim());
+        if (!pc || !pc.ok) { console.warn('[DG send] прокси недоступен — деманд не пашет, пропуск'); return; }
+
+        let config = [];
+        try { if (existsSync(TRAFFIC_FILE)) config = JSON.parse(await readFile(TRAFFIC_FILE, 'utf-8')); } catch (e) { return; }
+        const dgCamps = (Array.isArray(config) ? config : []).filter(c => c && c.dg === true && (c.webAppUrl || '').trim());
+        if (!dgCamps.length) return;
+
+        let links = {}; try { if (existsSync(KEITARO_LINKS_FILE)) links = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')) || {}; } catch (e) { /* ignore */ }
+        // Деп/Рега тумблеры лежат на данных кампании (_traffic_data.json), дефолт — оба вкл.
+        let toggles = {};
+        try { if (existsSync(TRAFFIC_DATA_FILE)) { const d = (JSON.parse(await readFile(TRAFFIC_DATA_FILE, 'utf-8')).data) || {}; for (const v of Object.values(d)) { if (v && v.customName) toggles[v.customName] = { dep: v.dgDep !== false, reg: v.dgReg !== false }; } } } catch (e) { /* ignore */ }
+
+        const sent = await loadDgSent();
+        const nowMs = Date.now(), DAY = 86400000;
+        let changed = false;
+
+        for (const camp of dgCamps) {
+            const name = camp.name;
+            const link = links[name];
+            if (!link || link.id == null) continue;                // не слинкована с Keitaro — пропуск
+            let convs;
+            try { convs = await dgFetchConversions(link.id); } catch (e) { console.warn('[DG send]', name, 'Keitaro fail:', e.message); continue; }
+            const tg = toggles[name] || { dep: true, reg: true };
+            const filtered = convs.filter(c => (c.type === 'деп' ? tg.dep : tg.reg));
+            const seen = sent[name] || (sent[name] = {});
+            const fresh = filtered.filter(c => !seen[c.gclid + '|' + c.time]);
+            if (!fresh.length) continue;
+            const rows = fresh.map(c => ({ gclid: c.gclid, name: '', time: c.time, type: c.type }));
+            const resp = await dgPostReceiver(camp.webAppUrl.trim(), { token: dgSettings.token || '', rows });
+            let okBody = false; try { okBody = JSON.parse(resp.body || '{}').ok === true; } catch (e) { /* ignore */ }
+            if (resp.ok && okBody) {
+                for (const c of fresh) seen[c.gclid + '|' + c.time] = nowMs;
+                changed = true;
+                console.log('[DG send]', name, '->', rows.length, 'конв. отправлено в приёмник');
+            } else {
+                console.warn('[DG send]', name, 'приёмник не принял (http ' + resp.status + ')');
+            }
+        }
+        // Прунинг ключей старше 5 дней (окно выборки — 3 дня, запас на повтор).
+        for (const cn of Object.keys(sent)) {
+            for (const k of Object.keys(sent[cn])) { if (nowMs - sent[cn][k] > 5 * DAY) { delete sent[cn][k]; changed = true; } }
+        }
+        if (changed) { try { await saveDgSent(); } catch (e) { /* ignore */ } }
+    } catch (e) {
+        console.error('[DG send] cycle error:', e.message);
+    } finally {
+        _dgSendLock = false;
+    }
+}
+// Первый прогон через 45с после старта, дальше каждые 10 минут.
+setTimeout(() => { runDgSendCycle().catch(() => {}); setInterval(() => runDgSendCycle().catch(() => {}), 10 * 60 * 1000); }, 45000);
+
 // --- Traffic Buyer worker (clone of stats worker; Google Sheets read via NodeMaven proxy; bell-only, no Telegram) ---
 let _buyerRefreshLock = false;
 // fetch-compatible wrapper ({ ok, status, text() }) that routes a GET through the proxy via system curl.
