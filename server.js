@@ -931,7 +931,7 @@ app.delete('/api/traffic-buyer/:name', async (req, res) => {
 app.patch('/api/traffic-buyer/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote', 'dgDep', 'dgReg'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -1520,7 +1520,7 @@ app.delete('/api/traffic/:name', async (req, res) => {
 app.patch('/api/traffic/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote', 'dgDep', 'dgReg'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -1841,7 +1841,7 @@ app.delete('/api/traffic-admin/:name', async (req, res) => {
 app.patch('/api/traffic-admin/:name', async (req, res) => {
     try {
         const campaignToUpdate = req.params.name;
-        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote'];
+        const ALLOWED_PATCH_FIELDS = ['comment', 'customStatus', 'siteUrl', 'costAlert', 'campTask', 'campTimer', 'primaryKeyword', 'campNote', 'costAlertNote', 'dgDep', 'dgReg'];
         const updates = {};
         for (const key of ALLOWED_PATCH_FIELDS) {
             if (req.body[key] !== undefined) {
@@ -3329,6 +3329,245 @@ app.post('/api/traffic-buyer/settings/test-tg', async (req, res) => {
     const b = req.body || {};
     const ok = await sendBuyerTelegram('✅ Traffic Buyer: тестовое сообщение — бот подключён.', b.tgToken, b.tgChatId);
     res.json({ ok });
+});
+
+// --- Demand Gen conversion export: settings (proxy scoped to DG only + own token) ---
+const TRAFFIC_DG_SETTINGS_FILE = join(__dirname, 'saved_sessions', '_traffic_dg_settings.json');
+let dgSettings = { proxy: '', token: '' };
+async function saveDgSettings() {
+    const tmp = TRAFFIC_DG_SETTINGS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+    await writeFile(tmp, JSON.stringify(dgSettings, null, 2), 'utf-8');
+    await rename(tmp, TRAFFIC_DG_SETTINGS_FILE);
+}
+async function loadDgSettings() {
+    try { if (existsSync(TRAFFIC_DG_SETTINGS_FILE)) dgSettings = { ...dgSettings, ...JSON.parse(await readFile(TRAFFIC_DG_SETTINGS_FILE, 'utf-8')) }; }
+    catch (e) { console.error('[DG] settings load failed:', e.message); }
+    if (!dgSettings.token) { dgSettings.token = 'dg-' + randomBytes(16).toString('hex'); try { await saveDgSettings(); } catch (e) { /* ignore */ } }
+}
+await loadDgSettings();
+// Прокси используется ТОЛЬКО отправщиком DG-конверсий (PPC/остальное не трогает). Формат host:port:user:pass.
+function dgProxy() {
+    const p = (dgSettings.proxy || '').trim().split(':');
+    return { hostPort: p.length >= 2 ? p[0] + ':' + p[1] : '', auth: p.length >= 4 ? p[2] + ':' + p.slice(3).join(':') : '' };
+}
+app.get('/api/dg/settings', (req, res) => { res.json({ proxy: dgSettings.proxy || '', token: dgSettings.token || '' }); });
+app.post('/api/dg/settings', async (req, res) => {
+    const b = req.body || {};
+    if (b.proxy !== undefined) {
+        if (typeof b.proxy !== 'string' || b.proxy.length > 500) return res.status(400).json({ error: 'proxy invalid' });
+        dgSettings.proxy = b.proxy.trim();
+    }
+    try { await saveDgSettings(); } catch (e) { return res.status(500).json({ error: e.message }); }
+    _dgProxyCache = { at: 0, ok: null, ip: '', err: '' };
+    auditLog('SETTINGS', 'traffic-dg', `proxy=${dgSettings.proxy ? 'custom' : 'none'}`, req);
+    res.json({ ok: true });
+});
+app.post('/api/dg/settings/check-proxy', async (req, res) => {
+    const raw = (req.body && typeof req.body.proxy === 'string' && req.body.proxy.trim()) || dgSettings.proxy || '';
+    const r = await checkBuyerProxy(raw);   // переиспользуем байерский тестер egress-IP
+    if (r && r.ok && r.ip) r.country = await lookupIpCountry(r.ip);
+    res.json(r);
+});
+// DG работает ТОЛЬКО через прокси (как чтение у байера). Статус кэшируем на 2 мин, чтобы не тормозить.
+let _dgProxyCache = { at: 0, ok: null, ip: '', err: '' };
+app.get('/api/dg/status', async (req, res) => {
+    const now = Date.now();
+    if (_dgProxyCache.ok !== null && now - _dgProxyCache.at < 120000) return res.json(_dgProxyCache);
+    const raw = (dgSettings.proxy || '').trim();
+    if (!raw) { _dgProxyCache = { at: now, ok: false, ip: '', err: 'не настроен' }; return res.json(_dgProxyCache); }
+    const r = await checkBuyerProxy(raw);
+    _dgProxyCache = { at: now, ok: !!r.ok, ip: (r && r.ip) || '', err: r && r.ok ? '' : ((r && r.error) || 'не работает') };
+    res.json(_dgProxyCache);
+});
+// Свежие конверсии кампании из Keitaro (для блока в раскрытии DG). gclid=external_id, тип по status.
+app.get('/api/dg/conversions', async (req, res) => {
+    if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
+    const name = String(req.query.campaign || '').trim();
+    if (!name) return res.status(400).json({ error: 'campaign required' });
+    try {
+        let cid = null;
+        try { if (existsSync(KEITARO_LINKS_FILE)) { const L = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); if (L[name] && L[name].id != null) cid = L[name].id; } } catch (e) { /* ignore */ }
+        if (cid == null) return res.json({ ok: true, linked: false, rows: [] });   // не слинкована — не показываем чужие конверсии
+        const now = Date.now(), DAY = 86400000;
+        const body = { range: { from: new Date(now - 7 * DAY).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10), timezone: 'Europe/Moscow' }, limit: 100, sort: [{ name: 'postback_datetime', order: 'desc' }] };
+        if (cid != null) body.filters = [{ name: 'campaign_id', operator: 'EQUALS', expression: String(cid) }];
+        const r = await fetch(`${KEITARO_URL}/admin_api/v1/conversions/log`, { method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!r.ok) return res.status(502).json({ error: 'Keitaro API ' + r.status });
+        const j = await r.json();
+        const rows = (j.rows || []).filter(row => (row.external_id || '').length > 10).map(row => ({
+            gclid: row.external_id,
+            time: row.postback_datetime || row.click_datetime || '',
+            type: (row.status === 'sale') ? 'деп' : 'рега'
+        }));
+        res.json({ ok: true, linked: cid != null, rows });
+    } catch (e) {
+        res.status(502).json({ error: e.message });
+    }
+});
+
+// DG: отдача кода скриптов кнопкам (в приёмник подставляется токен из настроек)
+const OCI_RECEIVER_CODE = `/**
+ * OCI Приёмник — привязанный к таблице Apps Script.
+ * Расширения → Apps Script → вставить → Развернуть → Веб-приложение
+ * (Выполнять: от моего имени | Доступ: все). Скопировать web-app URL в дашборд.
+ * Наш сервер шлёт сюда POST с конверсиями; скрипт вписывает строки в лист "conversions".
+ */
+var TOKEN = '__TOKEN__';           // подставляется дашбордом при копировании
+var SHEET = 'conversions';
+
+function doPost(e) {
+  try {
+    var body = JSON.parse(e.postData.contents || '{}');
+    if (body.token !== TOKEN) return _json({ ok: false, error: 'bad token' });
+    var rows = body.rows || [];    // [{gclid, time, name, type}]
+    if (!rows.length) return _json({ ok: true, added: 0 });
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName(SHEET) || ss.insertSheet(SHEET);
+    // дедуп по gclid+time (на случай повторной доставки)
+    var seen = {};
+    var have = sh.getDataRange().getValues();
+    for (var i = 0; i < have.length; i++) seen[have[i][0] + '|' + have[i][2]] = true;
+    var out = [];
+    for (var j = 0; j < rows.length; j++) {
+      var r = rows[j];
+      var key = r.gclid + '|' + r.time;
+      if (seen[key]) continue;
+      seen[key] = true;
+      // формат Google Ads: Click ID | Name | Time | Value | Currency | тип(служебное)
+      out.push([r.gclid, r.name, r.time, '', '', r.type || '']);
+    }
+    if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, 6).setValues(out);
+    return _json({ ok: true, added: out.length });
+  } catch (err) {
+    return _json({ ok: false, error: String(err) });
+  }
+}
+function doGet() { return _json({ ok: true, service: 'oci-receiver' }); }
+function _json(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+`;
+const OCI_LOADER_CODE = `/**
+ * OCI Загрузчик (Demand Gen) — вставляется в Google Ads (Инструменты -> Скрипты). Расписание: Hourly.
+ * Одна таблица, два направления:
+ *   1) Статистика (Info + Статистика_Кампаний) -> дашборд читает СЕГОДНЯ/ВСЕ ВРЕМЯ;
+ *   2) Конверсии: лист "conversions" (туда пишет приёмник) -> грузит в Google Ads.
+ * Имя конверсии находит сам (единственная офлайн-конверсия UPLOAD_CLICKS).
+ */
+function main() {
+  var acc = AdsApp.currentAccount();
+  var spreadsheet = getOrCreateSpreadsheet(acc.getName(), acc.getCustomerId());
+
+  // --- статистика для дашборда (как в PPC, но только необходимое) ---
+  writeInfo(spreadsheet, acc.getCustomerId(), acc.getName(), acc.getCurrencyCode());
+  exportCampaignStats(spreadsheet);
+
+  // --- конверсии в Ads ---
+  var convName = detectUploadConversion();
+  writeConfig(spreadsheet, convName);
+  uploadConversions(spreadsheet, convName);
+
+  Logger.log('Таблица: ' + spreadsheet.getUrl());
+  Logger.log('Имя конверсии: ' + (convName || '- не найдена (создай Import from clicks)'));
+}
+
+function writeInfo(spreadsheet, accountId, accountName, currency) {
+  var now = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd HH:mm:ss');
+  var s = getOrCreateSheet(spreadsheet, 'Info');
+  s.clear();
+  s.appendRow(['account_id', 'account_name', 'currency', 'updated_at', 'script_run_at']);
+  s.appendRow([accountId, accountName, currency, now, now]);
+}
+
+function exportCampaignStats(spreadsheet) {
+  var sheet = getOrCreateSheet(spreadsheet, 'Статистика_Кампаний');
+  sheet.clear();
+  sheet.appendRow(['Кампания', 'Статус', 'Период', 'Показы', 'Клики', 'Затраты']);
+  var qToday = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign WHERE segments.date DURING TODAY";
+  var rToday = AdsApp.search(qToday);
+  while (rToday.hasNext()) { var row = rToday.next(); sheet.appendRow([row.campaign.name, row.campaign.status, 'Сегодня', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]); }
+  var qTotal = "SELECT campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros FROM campaign";
+  var rTotal = AdsApp.search(qTotal);
+  while (rTotal.hasNext()) { var row = rTotal.next(); sheet.appendRow([row.campaign.name, row.campaign.status, 'Все время', row.metrics.impressions, row.metrics.clicks, row.metrics.costMicros / 1000000]); }
+}
+
+function detectUploadConversion() {
+  try {
+    var it = AdsApp.report("SELECT conversion_action.name FROM conversion_action WHERE conversion_action.type = 'UPLOAD_CLICKS' AND conversion_action.status = 'ENABLED'").rows();
+    if (it.hasNext()) return it.next()['conversion_action.name'];
+  } catch (e) {}
+  return '';
+}
+
+function writeConfig(spreadsheet, convName) {
+  var cfg = getOrCreateSheet(spreadsheet, 'config');
+  cfg.clear();
+  cfg.getRange(1, 1, 1, 2).setValues([['conversion_name', convName || '']]);
+}
+
+function uploadConversions(spreadsheet, convName) {
+  var sh = spreadsheet.getSheetByName('conversions');
+  if (!sh || sh.getLastRow() < 2) { Logger.log('Нет новых конверсий'); return; }
+  var data = sh.getDataRange().getValues();  // gclid,name,time,value,currency,type,sent
+  var upload = AdsApp.bulkUploads().newCsvUpload(['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'], { moneyInMicros: false });
+  var toMark = [], n = 0;
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][6] === 'sent' || !data[i][0]) continue;
+    upload.append({ 'Google Click ID': data[i][0], 'Conversion Name': data[i][1] || convName, 'Conversion Time': data[i][2], 'Conversion Value': '', 'Conversion Currency': '' });
+    toMark.push(i + 1); n++;
+  }
+  if (n === 0) { Logger.log('Все конверсии уже отправлены'); return; }
+  upload.apply();
+  for (var k = 0; k < toMark.length; k++) sh.getRange(toMark[k], 7).setValue('sent');
+  Logger.log('Отправлено конверсий: ' + n);
+}
+
+function getOrCreateSheet(spreadsheet, sheetName) {
+  var sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) { sheet = spreadsheet.insertSheet(sheetName); }
+  return sheet;
+}
+
+function getOrCreateSpreadsheet(accountName, accountId) {
+  var props = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty('SHEET_ID');
+  if (sheetId) {
+    var existing = tryOpenSpreadsheet(sheetId, props);
+    if (existing) { ensureSharing(sheetId, props); return existing; }
+  }
+  var spreadsheet = SpreadsheetApp.create('Google Ads Data - ' + accountName + ' (' + accountId + ')');
+  var newSheetId = spreadsheet.getId();
+  props.setProperty('SHEET_ID', newSheetId);
+  props.deleteProperty('SHARING_DONE');
+  ensureSharing(newSheetId, props);
+  return spreadsheet;
+}
+
+function tryOpenSpreadsheet(sheetId, props) {
+  for (var i = 0; i < 3; i++) {
+    try { return SpreadsheetApp.openById(sheetId); }
+    catch (e) {
+      var msg = (e.message || '').toLowerCase();
+      if (msg.indexOf('not found') !== -1 || msg.indexOf('invalid') !== -1 || msg.indexOf('does not exist') !== -1 || msg.indexOf('unable to find') !== -1) {
+        props.deleteProperty('SHEET_ID'); props.deleteProperty('SHARING_DONE'); return null;
+      }
+      if (i < 2) Utilities.sleep(2000 * (i + 1));
+    }
+  }
+  throw new Error('Временная ошибка Google API при открытии таблицы. Следующий запуск повторит.');
+}
+
+function ensureSharing(sheetId, props) {
+  if (props.getProperty('SHARING_DONE') === 'true') return;
+  try {
+    DriveApp.getFileById(sheetId).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    props.setProperty('SHARING_DONE', 'true');
+  } catch (e) {}
+}`;
+app.get('/api/dg/script', (req, res) => {
+    const t = String(req.query.type || '');
+    let code = t === 'loader' ? OCI_LOADER_CODE : (t === 'receiver' ? OCI_RECEIVER_CODE : '');
+    if (!code) return res.status(400).json({ error: 'type=loader|receiver' });
+    if (t === 'receiver') code = code.split('__TOKEN__').join(dgSettings.token || '');
+    res.type('text/plain').send(code);
 });
 
 // --- Traffic Buyer worker (clone of stats worker; Google Sheets read via NodeMaven proxy; bell-only, no Telegram) ---

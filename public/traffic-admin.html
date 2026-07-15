@@ -164,6 +164,23 @@
 
         const CampaignRow = ({ data, onRefresh, index, onDragStart, onDragEnter, onDragEnd, isDraggedOver, isDragged }) => {
             const [isExpanded, setIsExpanded] = useState(false);
+            const isDg = /demand\s?gen/i.test(data.customName || '');
+            const [dgDep, setDgDep] = useState(data.dgDep !== false);
+            const [dgReg, setDgReg] = useState(data.dgReg !== false);
+            const [dgConvs, setDgConvs] = useState(null);
+            const [dgLoading, setDgLoading] = useState(false);
+            useEffect(() => {
+                if (!isExpanded || !isDg || dgConvs !== null) return;
+                setDgLoading(true);
+                fetch(`/api/dg/conversions?campaign=${encodeURIComponent(data.customName)}`)
+                    .then(r => r.ok ? r.json() : { rows: [] })
+                    .then(j => setDgConvs(j.rows || []))
+                    .catch(() => setDgConvs([]))
+                    .finally(() => setDgLoading(false));
+            }, [isExpanded, isDg]);
+            const saveDgToggle = async (field, val) => {
+                try { await fetch(`/api/traffic-admin/${encodeURIComponent(data.customName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: val }), keepalive: true }); } catch (e) {}
+            };
             const [isRefreshing, setIsRefreshing] = useState(false);
             const [isDeleting, setIsDeleting] = useState(false);
             const [showEditModal, setShowEditModal] = useState(false);
@@ -247,7 +264,7 @@
             const hasQueries = data.queries && data.queries.length > 0;
             const hasKeywords = data.keywords && data.keywords.length > 0;
             const hasAdTexts = data.adTexts && data.adTexts.length > 0;
-            const hasAnyExpand = hasQueries || hasKeywords || hasAdTexts;
+            const hasAnyExpand = hasQueries || hasKeywords || hasAdTexts || isDg;
             const [activeTab, setActiveTab] = useState(hasQueries ? 'queries' : hasKeywords ? 'keywords' : 'adTexts');
             const [customStatus, setCustomStatus] = useState(data.customStatus || 'warmup');
             const [showStatusPicker, setShowStatusPicker] = useState(false);
@@ -713,6 +730,45 @@
 
                     <div className={`accordion-content ${isExpanded ? 'expanded' : ''} bg-[#0c0c0e] border-t border-zinc-800/50`}>
                         <div className="p-4 pl-11">
+                            {isDg && (
+                              <div className="mb-1">
+                                <div className="flex items-center flex-wrap gap-x-5 gap-y-2 mb-3">
+                                    <span className="text-[10px] uppercase tracking-widest font-bold text-zinc-300"><i className="fas fa-bullseye text-zinc-500 mr-1.5 text-[10px]"></i>Конверсии в Google Ads</span>
+                                    <span className="text-xs text-zinc-600">{dgLoading ? 'загрузка…' : ((dgConvs || []).length + ' за 7 дней')}</span>
+                                    <div className="flex items-center gap-4 ml-auto">
+                                        <label className="flex items-center gap-1.5 cursor-pointer" title="Отправлять депозиты">
+                                            <span className="text-[11px] text-zinc-400">Деп</span>
+                                            <button onClick={() => { const v = !dgDep; setDgDep(v); saveDgToggle('dgDep', v); }} className={`relative inline-block w-8 h-4 rounded-full transition-colors ${dgDep ? 'bg-emerald-600/80' : 'bg-zinc-700'}`}><span className={`absolute top-0.5 w-3 h-3 bg-white rounded-full ${dgDep ? 'right-0.5' : 'left-0.5'}`}></span></button>
+                                        </label>
+                                        <label className="flex items-center gap-1.5 cursor-pointer" title="Отправлять регистрации">
+                                            <span className="text-[11px] text-zinc-400">Рега</span>
+                                            <button onClick={() => { const v = !dgReg; setDgReg(v); saveDgToggle('dgReg', v); }} className={`relative inline-block w-8 h-4 rounded-full transition-colors ${dgReg ? 'bg-sky-600/80' : 'bg-zinc-700'}`}><span className={`absolute top-0.5 w-3 h-3 bg-white rounded-full ${dgReg ? 'right-0.5' : 'left-0.5'}`}></span></button>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div className="rounded border border-zinc-800 overflow-hidden max-h-[300px] overflow-y-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead><tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+                                            <th className="p-2 font-normal">Google Click ID</th>
+                                            <th className="p-2 font-normal w-40">Время</th>
+                                            <th className="p-2 font-normal w-20">Тип</th>
+                                        </tr></thead>
+                                        <tbody className="text-xs text-zinc-300">
+                                            {(dgConvs || []).filter(c => (c.type === 'деп' && dgDep) || (c.type === 'рега' && dgReg)).slice(0, 100).map((c, i) => (
+                                                <tr key={i} className="hover:bg-zinc-800/50 border-b border-zinc-800/50">
+                                                    <td className="p-2 font-mono text-zinc-200 truncate max-w-[360px]">{c.gclid}</td>
+                                                    <td className="p-2 text-zinc-400">{c.time}</td>
+                                                    <td className="p-2"><span className={`text-[9px] font-bold uppercase ${c.type === 'деп' ? 'text-green-400' : 'text-blue-400'}`}>{c.type}</span></td>
+                                                </tr>
+                                            ))}
+                                            {!dgLoading && (dgConvs || []).length === 0 && (
+                                                <tr><td colSpan={3} className="p-3 text-center text-zinc-600 text-xs">Конверсий за 7 дней нет</td></tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                              </div>
+                            )}
                             <div className="flex gap-4 mb-3 border-b border-zinc-800 pb-2">
                                 {hasQueries && (
                                     <button onClick={() => setActiveTab('queries')}
@@ -2210,6 +2266,8 @@ function ensureSharing(sheetId, props) {
             const [lastSyncTime, setLastSyncTime] = useState(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
 
             const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+            const [dgProxyStatus, setDgProxyStatus] = useState(null);
+            useEffect(() => { fetch('/api/dg/status').then(r => r.ok ? r.json() : null).then(setDgProxyStatus).catch(() => {}); }, []);
             const [newCampName, setNewCampName] = useState('');
             const [newCampUrl, setNewCampUrl] = useState('');
             const [newCampSiteUrl, setNewCampSiteUrl] = useState('');
@@ -2218,6 +2276,8 @@ function ensureSharing(sheetId, props) {
             const [copied, setCopied] = useState(false);
             const [copiedX2, setCopiedX2] = useState(false);
             const [copiedNew, setCopiedNew] = useState(false);
+            const [copiedOciL, setCopiedOciL] = useState(false);
+            const [copiedOciR, setCopiedOciR] = useState(false);
             const [isSavingOrder, setIsSavingOrder] = useState(false);
             const [showYesterday, setShowYesterday] = useState(false);
             const [hideZeroSpend, setHideZeroSpend] = useState(() => { try { return localStorage.getItem('hideZeroSpend') === '1'; } catch { return false; } }); // фильтр «скрыть нулевой спенд»: выбор сохраняется в localStorage (общий для traffic/admin)
@@ -2628,6 +2688,12 @@ function ensureSharing(sheetId, props) {
                 }
             };
 
+            const copyOciLoader = async () => {
+                try { const code = await (await fetch('/api/dg/script?type=loader')).text(); await copyToClipboard(code); setCopiedOciL(true); setTimeout(() => setCopiedOciL(false), 2000); } catch (err) {}
+            };
+            const copyOciReceiver = async () => {
+                try { const code = await (await fetch('/api/dg/script?type=receiver')).text(); await copyToClipboard(code); setCopiedOciR(true); setTimeout(() => setCopiedOciR(false), 2000); } catch (err) {}
+            };
             const handleSaveCampaignLink = async (e) => {
                 e.preventDefault();
                 if (!newCampName || !newCampUrl) {
@@ -2932,6 +2998,13 @@ function ensureSharing(sheetId, props) {
                         </div>
                     </header>
 
+                    {dgProxyStatus && dgProxyStatus.ok === false && campaigns.some(c => /demand\s?gen/i.test(c.customName || '')) && (
+                        <div className="bg-red-500/10 border-b border-red-500/40 px-4 py-2 text-xs text-red-300 flex items-center gap-2">
+                            <i className="fas fa-triangle-exclamation"></i>
+                            <span><b>Demand Gen не пашет:</b> прокси {dgProxyStatus.err}. Конверсии не отправляются — настрой прокси в разделе «Трафик».</span>
+                        </div>
+                    )}
+
                     <main className="flex-1 overflow-hidden flex flex-col bg-[#0c0c0e]">
                         <div className="flex items-center p-3 border-b border-zinc-800 bg-zinc-950 text-[10px] uppercase tracking-widest text-zinc-500 font-bold sticky top-0 z-20 shadow-sm">
                             <div className="w-8 flex-shrink-0"></div>
@@ -3020,26 +3093,17 @@ function ensureSharing(sheetId, props) {
                                             Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads.
                                         </p>
                                         <div className="ml-7 relative group">
-                                            <div className="absolute right-2 top-2 z-10 flex gap-2">
-                                                <button
-                                                    onClick={copyScript}
-                                                    className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-zinc-700/50"
-                                                    title="Копировать стандартный скрипт"
-                                                >
-                                                    {copied ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> Копировать</>}
-                                                </button>
-                                                <button
-                                                    onClick={copyScriptX2}
-                                                    className="bg-purple-900/40 hover:bg-purple-800/60 text-purple-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-purple-800/50"
-                                                    title="Копировать обновленный (x2) скрипт"
-                                                >
-                                                    {copiedX2 ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> x2</>}
-                                                </button>
-                                                <button
-                                                    onClick={copyScriptNew}
-                                                    className="bg-green-900/40 hover:bg-green-800/60 text-green-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-green-800/50"
-                                                    title="Копировать расширенный скрипт (ключи + заголовки)"
-                                                >
+                                            <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+                                                <div className="flex items-center gap-1.5 border border-zinc-700 rounded-md pl-2 pr-1.5 py-1 bg-zinc-900/70">
+                                                    <span className="text-[9px] uppercase tracking-wider text-zinc-500 mr-0.5" title="Demand Gen — отправка конверсий">DG конв.</span>
+                                                    <button onClick={copyOciLoader} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2.5 py-1 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Скрипт для создания таблицы">
+                                                        {copiedOciL ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Таблица</>}
+                                                    </button>
+                                                    <button onClick={copyOciReceiver} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2.5 py-1 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Приёмник (Расширения -> Apps Script -> Deploy)">
+                                                        {copiedOciR ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Приёмник</>}
+                                                    </button>
+                                                </div>
+                                                <button onClick={copyScriptNew} className="bg-green-900/40 hover:bg-green-800/60 text-green-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-green-800/50" title="Копировать расширенный скрипт (ключи + заголовки)">
                                                     {copiedNew ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> NEW</>}
                                                 </button>
                                             </div>
