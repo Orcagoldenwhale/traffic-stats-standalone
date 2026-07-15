@@ -2271,6 +2271,8 @@ function ensureSharing(sheetId, props) {
             const [newCampName, setNewCampName] = useState('');
             const [newCampUrl, setNewCampUrl] = useState('');
             const [newCampSiteUrl, setNewCampSiteUrl] = useState('');
+            const [addMode, setAddMode] = useState('ppc');        // 'ppc' | 'dg'
+            const [newCampWebApp, setNewCampWebApp] = useState(''); // web-app ссылка приёмника (DG)
             const [gridCampaigns, setGridCampaigns] = useState([]);
             const [dropdownOpen, setDropdownOpen] = useState(false);
             const [copied, setCopied] = useState(false);
@@ -2700,6 +2702,10 @@ function ensureSharing(sheetId, props) {
                     alert('Пожалуйста, заполните оба поля');
                     return;
                 }
+                if (addMode === 'dg' && !newCampWebApp) {
+                    alert('Для Демандген укажите web-app ссылку приёмника');
+                    return;
+                }
 
                 try {
                     let existing = [];
@@ -2708,7 +2714,9 @@ function ensureSharing(sheetId, props) {
                         existing = await confRes.json();
                     }
 
-                    existing.push({ name: newCampName, url: newCampUrl, siteUrl: newCampSiteUrl || '', addedAt: new Date().toISOString() });
+                    const entry = { name: newCampName, url: newCampUrl, siteUrl: newCampSiteUrl || '', addedAt: new Date().toISOString() };
+                    if (addMode === 'dg') { entry.dg = true; entry.webAppUrl = newCampWebApp.trim(); }
+                    existing.push(entry);
 
                     const saveRes = await fetch(`/api/traffic-admin?version=${currentDataVersion.current}`, {
                         method: 'POST',
@@ -2727,6 +2735,7 @@ function ensureSharing(sheetId, props) {
                     setNewCampName('');
                     setNewCampUrl('');
                     setNewCampSiteUrl('');
+                    setNewCampWebApp('');
 
                     fetchDashboardData();
                 } catch (err) {
@@ -3084,33 +3093,55 @@ function ensureSharing(sheetId, props) {
                                 </div>
 
                                 <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+                                    {/* Тип кампании: PPC / Демандген */}
+                                    <div className="mb-6 flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1 w-fit">
+                                        <button type="button" onClick={() => setAddMode('ppc')} className={`px-5 py-1.5 rounded-md text-xs font-bold transition-colors ${addMode === 'ppc' ? 'bg-purple-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}>PPC</button>
+                                        <button type="button" onClick={() => setAddMode('dg')} className={`px-5 py-1.5 rounded-md text-xs font-bold transition-colors ${addMode === 'dg' ? 'bg-purple-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}>Демандген</button>
+                                    </div>
                                     <div className="mb-8">
                                         <div className="flex items-center gap-2 mb-3">
                                             <span className="bg-purple-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">1</span>
-                                            <h3 className="text-sm font-bold text-zinc-200">Скрипт Google Ads</h3>
+                                            <h3 className="text-sm font-bold text-zinc-200">{addMode === 'dg' ? 'Скрипты Google Ads (Таблица + Приёмник)' : 'Скрипт Google Ads'}</h3>
                                         </div>
-                                        <p className="text-xs text-zinc-400 mb-3 ml-7">
-                                            Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads.
-                                        </p>
-                                        <div className="ml-7 relative group">
-                                            <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
-                                                <div className="flex items-center gap-1.5 border border-zinc-700 rounded-md pl-2 pr-1.5 py-1 bg-zinc-900/70">
-                                                    <span className="text-[9px] uppercase tracking-wider text-zinc-500 mr-0.5" title="Demand Gen — отправка конверсий">DG конв.</span>
-                                                    <span className="relative group/tt inline-flex"><button onClick={copyOciLoader} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2.5 py-1 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Скрипт для создания таблицы">
-                                                        {copiedOciL ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Таблица</>}
-                                                    </button><div className="hidden group-hover/tt:block absolute right-0 top-full mt-1.5 z-40 w-64 bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-[11px] font-normal normal-case tracking-normal text-zinc-300 leading-relaxed shadow-xl text-left"><b className="text-zinc-100">Скрипт для таблицы</b><br/>1. Google Ads → Инструменты → Скрипты → «+».<br/>2. Вставь код → «Запустить».<br/>3. Расписание: <b>Hourly</b> (каждый час).<br/>4. Из логов скопируй ссылку на таблицу → вставь в дашборд.</div></span>
-                                                    <span className="relative group/tt inline-flex"><button onClick={copyOciReceiver} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2.5 py-1 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Приёмник (Расширения -> Apps Script -> Deploy)">
-                                                        {copiedOciR ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Приёмник</>}
-                                                    </button><div className="hidden group-hover/tt:block absolute right-0 top-full mt-1.5 z-40 w-64 bg-zinc-900 border border-zinc-700 rounded-lg p-2.5 text-[11px] font-normal normal-case tracking-normal text-zinc-300 leading-relaxed shadow-xl text-left"><b className="text-zinc-100">Приёмник</b><br/>1. Открой созданную таблицу → Расширения → Apps Script.<br/>2. Вставь код → «Развернуть» → «Веб-приложение» (выполнять: от меня, доступ: все).<br/>3. Скопируй web-app ссылку → вставь в дашборд.</div></span>
+                                        {addMode === 'dg' ? (
+                                            <div className="ml-7">
+                                                <p className="text-xs text-zinc-400 mb-3">Демандген использует <b>два</b> скрипта. Скопируйте оба — пошаговая инструкция во всплывающей подсказке на каждой кнопке.</p>
+                                                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+                                                    <div className="flex items-start gap-2 text-xs text-zinc-400">
+                                                        <span className="bg-zinc-700 text-zinc-200 text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5">1</span>
+                                                        <span><b className="text-zinc-300">Таблица</b> → в Google Ads (Инструменты → Скрипты), запустить, расписание <b>Hourly</b>. Создаёт таблицу, пишет статистику и грузит конверсии в Google.</span>
+                                                    </div>
+                                                    <div className="flex items-start gap-2 text-xs text-zinc-400">
+                                                        <span className="bg-zinc-700 text-zinc-200 text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shrink-0 mt-0.5">2</span>
+                                                        <span><b className="text-zinc-300">Приёмник</b> → в созданной таблице (Расширения → Apps Script), развернуть как веб-приложение. Принимает конверсии от сервера.</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 pt-1">
+                                                        <span className="relative group/tt inline-flex"><button onClick={copyOciLoader} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Скрипт для создания таблицы">
+                                                            {copiedOciL ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Таблица</>}
+                                                        </button><div className="hidden group-hover/tt:block absolute left-0 top-full mt-1.5 z-40 w-64 bg-zinc-950 border border-zinc-700 rounded-lg p-2.5 text-[11px] font-normal normal-case tracking-normal text-zinc-300 leading-relaxed shadow-xl text-left"><b className="text-zinc-100">Скрипт для таблицы</b><br/>1. Google Ads → Инструменты → Скрипты → «+».<br/>2. Вставь код → «Запустить».<br/>3. Расписание: <b>Hourly</b> (каждый час).<br/>4. Из логов скопируй ссылку на таблицу → вставь ниже.</div></span>
+                                                        <span className="relative group/tt inline-flex"><button onClick={copyOciReceiver} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-1.5 border border-zinc-700/50" title="Приёмник (Расширения -> Apps Script -> Deploy)">
+                                                            {copiedOciR ? <><i className="fas fa-check text-green-500"></i> Скоп.</> : <><i className="far fa-copy"></i> Приёмник</>}
+                                                        </button><div className="hidden group-hover/tt:block absolute left-0 top-full mt-1.5 z-40 w-64 bg-zinc-950 border border-zinc-700 rounded-lg p-2.5 text-[11px] font-normal normal-case tracking-normal text-zinc-300 leading-relaxed shadow-xl text-left"><b className="text-zinc-100">Приёмник</b><br/>1. Открой созданную таблицу → Расширения → Apps Script.<br/>2. Вставь код → «Развернуть» → «Веб-приложение» (выполнять: от меня, доступ: все).<br/>3. Скопируй web-app ссылку → вставь ниже.</div></span>
+                                                    </div>
                                                 </div>
-                                                <button onClick={copyScriptNew} className="bg-green-900/40 hover:bg-green-800/60 text-green-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-green-800/50" title="Копировать расширенный скрипт (ключи + заголовки)">
-                                                    {copiedNew ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> NEW</>}
-                                                </button>
                                             </div>
-                                            <pre className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg text-[10px] text-zinc-300 font-mono overflow-x-auto h-32 custom-scrollbar">
-                                                {GOOGLE_ADS_SCRIPT}
-                                            </pre>
-                                        </div>
+                                        ) : (
+                                            <>
+                                                <p className="text-xs text-zinc-400 mb-3 ml-7">
+                                                    Скопируйте этот скрипт и вставьте его в раздел <b>"Инструменты и настройки" &gt; "Скрипты"</b> в вашем кабинете Google Ads.
+                                                </p>
+                                                <div className="ml-7 relative group">
+                                                    <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+                                                        <button onClick={copyScriptNew} className="bg-green-900/40 hover:bg-green-800/60 text-green-300 px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-2 border border-green-800/50" title="Копировать расширенный скрипт (ключи + заголовки)">
+                                                            {copiedNew ? <><i className="fas fa-check text-green-500"></i> Скопировано</> : <><i className="far fa-copy"></i> NEW</>}
+                                                        </button>
+                                                    </div>
+                                                    <pre className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg text-[10px] text-zinc-300 font-mono overflow-x-auto h-32 custom-scrollbar">
+                                                        {GOOGLE_ADS_SCRIPT}
+                                                    </pre>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
 
                                     <div>
@@ -3180,6 +3211,22 @@ function ensureSharing(sheetId, props) {
                                                     Вставьте ссылку на Google Таблицу, которую сгенерировал скрипт.
                                                 </p>
                                             </div>
+
+                                            {addMode === 'dg' && (
+                                                <div>
+                                                    <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Web-app ссылка приёмника</label>
+                                                    <input
+                                                        type="url"
+                                                        value={newCampWebApp}
+                                                        onChange={e => setNewCampWebApp(e.target.value)}
+                                                        placeholder="https://script.google.com/macros/s/.../exec"
+                                                        className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-3 rounded-lg focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-600"
+                                                    />
+                                                    <p className="text-[10px] text-zinc-500 mt-1">
+                                                        Ссылка из деплоя приёмника (Apps Script → Веб-приложение). Сервер шлёт сюда конверсии через прокси.
+                                                    </p>
+                                                </div>
+                                            )}
 
                                             <div>
                                                 <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Сайт (необязательно)</label>
