@@ -1022,7 +1022,7 @@ app.patch('/api/traffic-buyer/:name', async (req, res) => {
 app.put('/api/traffic-buyer/:name/edit', async (req, res) => {
     try {
         const oldName = req.params.name;
-        const { newName, newUrl, newSiteUrl } = req.body;
+        const { newName, newUrl, newSiteUrl, newWebAppUrl } = req.body;
         if (!newName || !newUrl) return res.status(400).json({ error: 'newName and newUrl are required' });
         await withFileLock(TRAFFIC_BUYER_FILE, async () => {
             if (!existsSync(TRAFFIC_BUYER_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
@@ -1030,7 +1030,7 @@ app.put('/api/traffic-buyer/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || '') }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
@@ -1635,7 +1635,7 @@ app.patch('/api/traffic/:name', async (req, res) => {
 app.put('/api/traffic/:name/edit', async (req, res) => {
     try {
         const oldName = req.params.name;
-        const { newName, newUrl, newSiteUrl } = req.body;
+        const { newName, newUrl, newSiteUrl, newWebAppUrl } = req.body;
         if (!newName || !newUrl) return res.status(400).json({ error: 'newName and newUrl are required' });
         await withFileLock(TRAFFIC_FILE, async () => {
             if (!existsSync(TRAFFIC_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
@@ -1643,7 +1643,7 @@ app.put('/api/traffic/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || '') }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
@@ -1950,7 +1950,7 @@ app.patch('/api/traffic-admin/:name', async (req, res) => {
 app.put('/api/traffic-admin/:name/edit', async (req, res) => {
     try {
         const oldName = req.params.name;
-        const { newName, newUrl, newSiteUrl } = req.body;
+        const { newName, newUrl, newSiteUrl, newWebAppUrl } = req.body;
         if (!newName || !newUrl) return res.status(400).json({ error: 'newName and newUrl are required' });
         await withFileLock(TRAFFIC_ADMIN_FILE, async () => {
             if (!existsSync(TRAFFIC_ADMIN_FILE)) throw Object.assign(new Error('Config file not found'), { status: 404 });
@@ -1958,7 +1958,7 @@ app.put('/api/traffic-admin/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || '') }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });

@@ -201,6 +201,7 @@
             const [editName, setEditName] = useState(data.customName);
             const [editUrl, setEditUrl] = useState(data.url || '');
             const [editSiteUrl, setEditSiteUrl] = useState(data.siteUrl || '');
+            const [editWebApp, setEditWebApp] = useState(data.webAppUrl || '');
             const [isSavingEdit, setIsSavingEdit] = useState(false);
             
             const [comment, setComment] = useState(data.comment || '');
@@ -446,7 +447,7 @@
                     const res = await fetch(`/api/traffic/${encodeURIComponent(data.customName)}/edit`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ newName: editName.trim(), newUrl: editUrl.trim(), newSiteUrl: editSiteUrl.trim() })
+                        body: JSON.stringify({ newName: editName.trim(), newUrl: editUrl.trim(), newSiteUrl: editSiteUrl.trim(), ...(isDg ? { newWebAppUrl: editWebApp.trim() } : {}) })
                     });
                     if (res.ok) { setShowEditModal(false); onRefresh(); }
                     else { const err = await res.json().catch(() => ({})); alert(err.error || 'Ошибка сохранения'); }
@@ -654,7 +655,7 @@
                                 <button onClick={handleRefresh} className={`hover:text-purple-400 transition-colors opacity-0 group-hover:opacity-100 ml-1 ${isRefreshing ? 'animate-spin text-blue-400 opacity-100' : ''}`} title="Обновить данные">
                                     <i className="fas fa-redo text-[9px]"></i>
                                 </button>
-                                <button onClick={(e) => { e.stopPropagation(); setEditName(data.customName); setEditUrl(data.url || ''); setEditSiteUrl(data.siteUrl || ''); setShowEditModal(true); }} className="hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100 ml-2 text-zinc-600" title="Редактировать кампанию">
+                                <button onClick={(e) => { e.stopPropagation(); setEditName(data.customName); setEditUrl(data.url || ''); setEditSiteUrl(data.siteUrl || ''); setEditWebApp(data.webAppUrl || ''); setShowEditModal(true); }} className="hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100 ml-2 text-zinc-600" title="Редактировать кампанию">
                                     <i className="fas fa-edit text-[9px]"></i>
                                 </button>
                                 <button onClick={handleDelete} className={`hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 ml-1 text-zinc-600 ${isDeleting ? 'animate-pulse text-red-500 opacity-100' : ''}`} title="Удалить кампанию" disabled={isDeleting}>
@@ -986,6 +987,12 @@
                                         <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Сайт</label>
                                         <input type="url" value={editSiteUrl} onChange={e => setEditSiteUrl(e.target.value)} placeholder="https://example.com" className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-2.5 rounded-lg focus:outline-none focus:border-blue-500 transition-colors" />
                                     </div>
+                                    {isDg && (
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Web-app ссылка приёмника <span className="text-purple-400 normal-case">· Демандген</span></label>
+                                        <input type="url" value={editWebApp} onChange={e => setEditWebApp(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="w-full bg-zinc-900 border border-zinc-700 text-sm text-zinc-200 p-2.5 rounded-lg focus:outline-none focus:border-blue-500 transition-colors" />
+                                    </div>
+                                    )}
                                 </div>
                                 <div className="flex justify-end gap-2 mt-5">
                                     <button onClick={() => setShowEditModal(false)} className="px-4 py-2 text-xs text-zinc-400 hover:text-white transition-colors">Отмена</button>
@@ -1895,6 +1902,9 @@ function ensureSharing(sheetId, props) {
                         return;
                     }
 
+                    const cfgByName = {};
+                    for (const c of configs) cfgByName[c.name] = c;
+
                     let allCampaignsMap = {};
 
                     // 1. Fetch from our Node background cache (or snapshot)
@@ -1966,6 +1976,7 @@ function ensureSharing(sheetId, props) {
                             comment: campData.comment || '',
                             customStatus: campData.customStatus || 'warmup',
                             siteUrl: campData.siteUrl || '',
+                            webAppUrl: (cfgByName[campData.customName] || {}).webAppUrl || '',
                             addedAt: campData.addedAt || '',
                             costAlert: campData.costAlert || 0,
                             campTask: campData.campTask || '',
@@ -1995,6 +2006,7 @@ function ensureSharing(sheetId, props) {
                                 comment: config.comment || '',
                                 customStatus: config.customStatus || 'warmup',
                                 siteUrl: config.siteUrl || '',
+                                webAppUrl: config.webAppUrl || '',
                                 addedAt: config.addedAt || '',
                                 costAlert: config.costAlert || 0,
                                 campNote: config.campNote || '',
