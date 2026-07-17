@@ -3371,13 +3371,6 @@ async function loadDgSettings() {
     if (!dgSettings.token) { dgSettings.token = 'dg-' + randomBytes(16).toString('hex'); try { await saveDgSettings(); } catch (e) { /* ignore */ } }
 }
 await loadDgSettings();
-// Скрытые конверсии: кампании, которым по ошибке привязали не ту (старую) Keitaro-кампанию.
-// Скрываем в UI И блокируем отправку в Google Ads (чужие депы не должны улетать в аккаунт).
-const TRAFFIC_DG_HIDDEN_FILE = join(__dirname, 'saved_sessions', '_traffic_dg_hidden.json');
-let dgHidden = {};   // { campaignName: true }
-async function loadDgHidden() { try { if (existsSync(TRAFFIC_DG_HIDDEN_FILE)) dgHidden = JSON.parse(await readFile(TRAFFIC_DG_HIDDEN_FILE, 'utf-8')) || {}; } catch (e) { dgHidden = {}; } }
-async function saveDgHidden() { const tmp = TRAFFIC_DG_HIDDEN_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp'; await writeFile(tmp, JSON.stringify(dgHidden, null, 2), 'utf-8'); await rename(tmp, TRAFFIC_DG_HIDDEN_FILE); }
-await loadDgHidden();
 // Прокси используется ТОЛЬКО отправщиком DG-конверсий (PPC/остальное не трогает). Формат host:port:user:pass.
 function dgProxy() {
     const p = (dgSettings.proxy || '').trim().split(':');
@@ -3417,7 +3410,6 @@ app.get('/api/dg/conversions', async (req, res) => {
     if (!KEITARO_URL || !KEITARO_TOKEN) return res.status(400).json({ error: 'Keitaro не настроен' });
     const name = String(req.query.campaign || '').trim();
     if (!name) return res.status(400).json({ error: 'campaign required' });
-    if (dgHidden[name]) return res.json({ ok: true, hidden: true, rows: [] });   // скрыто вручную (ошибочный линк)
     try {
         let cid = null;
         try { if (existsSync(KEITARO_LINKS_FILE)) { const L = JSON.parse(await readFile(KEITARO_LINKS_FILE, 'utf-8')); if (L[name] && L[name].id != null) cid = L[name].id; } } catch (e) { /* ignore */ }
@@ -3437,18 +3429,6 @@ app.get('/api/dg/conversions', async (req, res) => {
     } catch (e) {
         res.status(502).json({ error: e.message });
     }
-});
-
-// Скрыть/показать конверсии кампании (ошибочно привязан не тот Keitaro-линк). Линк НЕ трогаем:
-// скрываем из блока И блокируем отправку в Google Ads. Обратимо.
-app.post('/api/dg/hide', async (req, res) => {
-    const b = req.body || {};
-    const name = String(b.campaign || '').trim();
-    if (!name) return res.status(400).json({ error: 'campaign required' });
-    if (b.hidden === false) delete dgHidden[name]; else dgHidden[name] = true;
-    try { await saveDgHidden(); } catch (e) { return res.status(500).json({ error: e.message }); }
-    auditLog('DG_HIDE', 'traffic-dg', `${name}=${!!dgHidden[name]}`, req);
-    res.json({ ok: true, hidden: !!dgHidden[name] });
 });
 
 // DG: отдача кода скриптов кнопкам (в приёмник подставляется токен из настроек)
@@ -3699,7 +3679,6 @@ async function runDgSendCycle() {
 
         for (const camp of dgCamps) {
             const name = camp.name;
-            if (dgHidden[name]) continue;                          // скрыта вручную (ошибочный линк) — чужие конверсии НЕ шлём
             const link = links[name];
             if (!link || link.id == null) continue;                // не слинкована с Keitaro — пропуск
             let convs;
