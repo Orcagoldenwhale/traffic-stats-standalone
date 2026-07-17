@@ -684,6 +684,20 @@ if (KEITARO_URL && KEITARO_TOKEN) {
 
 // --- Keitaro daily cost auto-export (push yesterday's spend into Keitaro) ---
 const KEITARO_EXPORT_FILE = join(__dirname, 'saved_sessions', '_keitaro_export.json');
+// Офсеты выгрузки расходов: keitaroId -> база, добавляемая к нашему allTime при сравнении с Keitaro.
+// Сюда один раз списываются хвосты кампаний, добавленных до 2026-07-01, и разницы после сброса таблиц.
+const KEITARO_COST_OFFSETS_FILE = join(__dirname, 'saved_sessions', '_keitaro_cost_offsets.json');
+let costOffsets = null;
+async function loadCostOffsets() {
+    if (costOffsets) return;
+    try { costOffsets = existsSync(KEITARO_COST_OFFSETS_FILE) ? (JSON.parse(await readFile(KEITARO_COST_OFFSETS_FILE, 'utf-8')) || {}) : {}; }
+    catch (e) { costOffsets = {}; }
+}
+async function saveCostOffsets() {
+    const tmp = KEITARO_COST_OFFSETS_FILE + '.' + Date.now() + Math.random().toString(36).slice(2) + '.tmp';
+    await writeFile(tmp, JSON.stringify(costOffsets, null, 2), 'utf-8');
+    await rename(tmp, KEITARO_COST_OFFSETS_FILE);
+}
 const KEITARO_EXPORT_TZ_OFFSET = 1; // server local = UTC+1 (same basis as the daily snapshot)
 let keitaroExport = { enabled: true, time: '10:00', lastRunDate: null, lastRun: null };
 let keitaroExportRunning = false;
@@ -726,7 +740,6 @@ async function runKeitaroCostExport(trigger) {
         }
         let snapAt = null;
         const allNow = {};   // customName -> allTime.cost (текущий снимок)
-        const todayNow = {}; // customName -> today.cost (fallback для кампаний без вчерашней базы)
         for (const f of [TRAFFIC_ADMIN_DATA_SNAPSHOT_FILE, TRAFFIC_DATA_SNAPSHOT_FILE]) {
             if (!existsSync(f)) continue;
             const d = JSON.parse(await readFile(f, 'utf-8'));
@@ -734,46 +747,59 @@ async function runKeitaroCostExport(trigger) {
             for (const v of Object.values(d.data || {})) {
                 const cn = v.customName; if (!cn) continue;
                 const at = (v.stats && v.stats.allTime && +v.stats.allTime.cost) || 0;
-                const td = (v.stats && v.stats.today && +v.stats.today.cost) || 0;
                 if (allNow[cn] == null || at > allNow[cn]) allNow[cn] = at; // max across datasets
-                if (todayNow[cn] == null || td > todayNow[cn]) todayNow[cn] = td;
             }
         }
         if (!snapAt) return { ok: false, error: 'Нет снапшота' };
         const day = keitaroLocalDate(new Date(snapAt).getTime());
 
-        // Реальный дневной расход = прирост allTime за сутки (день снимка минус вчерашний архив).
-        const prevDay = keitaroLocalDate(new Date(snapAt).getTime() - 86400000);
-        const allPrev = {};
-        for (const an of ['traffic_admin_data.json', 'traffic_data.json']) {
-            const af = join(SNAPSHOT_ARCHIVE_DIR, prevDay, an);
-            if (!existsSync(af)) continue;
-            try {
-                const ad = JSON.parse(await readFile(af, 'utf-8'));
-                for (const v of Object.values(ad.data || {})) {
-                    const cn = v.customName; if (!cn) continue;
-                    const at = (v.stats && v.stats.allTime && +v.stats.allTime.cost) || 0;
-                    if (allPrev[cn] == null || at > allPrev[cn]) allPrev[cn] = at;
-                }
-            } catch (e) { /* битый архив игнорируем — упадём на fallback today.cost */ }
+        // Дошль-логика (2026-07): шлём разницу «наш allTime − расход, уже записанный в Keitaro».
+        // Сама себя чинит: не легло (нет кликов в окне дня) — разница останется и уйдёт следующим прогоном.
+        // Хвосты кампаний, добавленных до 2026-07-01, один раз списываются в офсет (дневные приросты идут дальше).
+        await loadCostOffsets();
+        const addedByName = {};
+        for (const cf of [TRAFFIC_FILE, TRAFFIC_ADMIN_FILE]) {
+            try { if (existsSync(cf)) { for (const c of JSON.parse(await readFile(cf, 'utf-8'))) { if (c && c.name && c.addedAt && (!addedByName[c.name] || c.addedAt > addedByName[c.name])) addedByName[c.name] = c.addedAt; } } } catch (e) { /* ignore */ }
         }
-        const costByName = {};
-        for (const cn of Object.keys(allNow)) {
-            const prev = allPrev[cn];
-            if (prev == null) { costByName[cn] = todayNow[cn] || 0; continue; } // нет вчерашней базы -> today.cost
-            const delta = allNow[cn] - prev;
-            costByName[cn] = delta > 0 ? delta : 0; // откат/глюк allTime -> 0 (не шлём минус)
+        const rangeTo = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        const weekFrom = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+        const ktCost = {}, ktClicks7 = {};
+        {
+            const [cr, kr] = await Promise.all([
+                fetch(`${KEITARO_URL}/admin_api/v1/report/build`, { method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify({ range: { from: '2026-01-01', to: rangeTo, timezone: 'Europe/Moscow' }, dimensions: ['campaign_id'], measures: ['cost'] }) }),
+                fetch(`${KEITARO_URL}/admin_api/v1/report/build`, { method: 'POST', headers: { 'Api-Key': KEITARO_TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify({ range: { from: weekFrom, to: rangeTo, timezone: 'Europe/Moscow' }, dimensions: ['campaign_id'], measures: ['clicks'] }) })
+            ]);
+            if (!cr.ok || !kr.ok) return { ok: false, error: `Keitaro report ${cr.status}/${kr.status}` };
+            for (const r of ((await cr.json()).rows || [])) ktCost[r.campaign_id] = +r.cost || 0;
+            for (const r of ((await kr.json()).rows || [])) ktClicks7[r.campaign_id] = +r.clicks || 0;
         }
 
         const byId = {};
         for (const [cn, link] of Object.entries(links)) {
             if (bannedSet.has(cn)) continue; // забаненные кампании в выгрузку расходов не идут
-            const cost = costByName[cn] || 0;
-            if (!byId[link.id]) byId[link.id] = { id: link.id, kname: link.name, cost: 0, cns: [] };
-            byId[link.id].cost += cost;
-            if (cost > 0) byId[link.id].cns.push(cn);
+            if (allNow[cn] == null) continue;
+            if (!byId[link.id]) byId[link.id] = { id: link.id, kname: link.name, our: 0, cns: [], added: '' };
+            byId[link.id].our += allNow[cn];
+            byId[link.id].cns.push(cn);
+            const a = addedByName[cn] || '';
+            if (a > byId[link.id].added) byId[link.id].added = a;
         }
-        const targets = Object.values(byId).filter(z => z.cost > 0.0001).map(z => ({ ...z, cost: +z.cost.toFixed(2) }));
+        let offsetsChanged = false, frozenInit = 0;
+        const targets = [];
+        for (const t of Object.values(byId)) {
+            const kt = ktCost[t.id] || 0;
+            if (costOffsets[t.id] === undefined) {                 // первый раз видим кампанию
+                if ((t.added || '') >= '2026-07-01') costOffsets[t.id] = 0;                     // свежая — хвост (прогрев) дошлётся
+                else { costOffsets[t.id] = +(kt - t.our).toFixed(2); frozenInit++; }           // старая — хвост списан в офсет
+                offsetsChanged = true;
+            }
+            const cost = +(t.our + (costOffsets[t.id] || 0) - kt).toFixed(2);
+            if (cost < -1) { costOffsets[t.id] = +(kt - t.our).toFixed(2); offsetsChanged = true; continue; } // сброс таблицы/ручной пуш в KT — поднимаем базу, приросты не блокируются
+            if (cost <= 1) continue;                               // порог: дрейф округления не шлём
+            if ((ktClicks7[t.id] || 0) === 0) continue;            // 0 кликов за 7 дней — мёртвая, хвост ждёт кликов
+            targets.push({ id: t.id, kname: t.kname, cost, cns: t.cns });
+        }
+        if (offsetsChanged) { try { await saveCostOffsets(); } catch (e) { /* ignore */ } }
 
         const win = { start_date: day + ' 00:00:00', end_date: day + ' 23:59:59', timezone: 'Europe/Moscow', currency: 'USD' };
         let okCount = 0, failCount = 0;
@@ -811,12 +837,12 @@ async function runKeitaroCostExport(trigger) {
             at: new Date().toISOString(), trigger: trigger || 'manual', day,
             campaigns: targets.length, ok: okCount, failed: failCount,
             sentTotal: +sentTotal.toFixed(2), landed: +(sentTotal - notLanded).toFixed(2),
-            notLanded: +notLanded.toFixed(2), zeroClick
+            notLanded: +notLanded.toFixed(2), zeroClick, frozenInit
         };
         keitaroExport.lastRun = result;
         await saveKeitaroExport();
         auditLog('KEITARO_EXPORT', 'keitaro', `${result.trigger} day=${day} sent=$${result.sentTotal} camps=${targets.length} landed=$${result.landed} zero=${zeroClick.length}`, { ip: 'server' });
-        console.log(`[KeitaroExport] ${result.trigger} day=${day}: sent $${result.sentTotal} / ${targets.length} camps (ok ${okCount}, fail ${failCount}); didn't land $${result.notLanded}/${zeroClick.length}`);
+        console.log(`[KeitaroExport] ${result.trigger} day=${day}: sent $${result.sentTotal} / ${targets.length} camps (ok ${okCount}, fail ${failCount}); didn't land $${result.notLanded}/${zeroClick.length}${frozenInit ? `; frozen tails ${frozenInit}` : ''}`);
         return { ok: true, result };
     } catch (e) {
         console.error('[KeitaroExport] run failed:', e.message);
