@@ -1056,7 +1056,7 @@ app.put('/api/traffic-buyer/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl, ...(String(newWebAppUrl).trim() ? { dg: true } : {}) } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
@@ -1669,7 +1669,7 @@ app.put('/api/traffic/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl, ...(String(newWebAppUrl).trim() ? { dg: true } : {}) } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
@@ -1984,7 +1984,7 @@ app.put('/api/traffic-admin/:name/edit', async (req, res) => {
             let configs = JSON.parse(data);
             let found = false;
             configs = configs.map(c => {
-                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl } : {}) }; }
+                if (c.name === oldName) { found = true; return { ...c, name: newName, url: newUrl, siteUrl: newSiteUrl !== undefined ? newSiteUrl : (c.siteUrl || ''), ...(newWebAppUrl !== undefined ? { webAppUrl: newWebAppUrl, ...(String(newWebAppUrl).trim() ? { dg: true } : {}) } : {}) }; }
                 return c;
             });
             if (!found) throw Object.assign(new Error('Campaign not found'), { status: 404 });
