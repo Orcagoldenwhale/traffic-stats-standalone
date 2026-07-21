@@ -3531,19 +3531,33 @@ function writeConfig(spreadsheet, convName) {
 
 function uploadConversions(spreadsheet, convName) {
   var sh = spreadsheet.getSheetByName('conversions');
-  if (!sh || sh.getLastRow() < 2) { Logger.log('Нет новых конверсий'); return; }
-  var data = sh.getDataRange().getValues();  // gclid,name,time,value,currency,type,sent
+  if (!sh || sh.getLastRow() < 1) { Logger.log('Нет новых конверсий'); return; }
+  var data = sh.getDataRange().getValues();  // приёмник пишет БЕЗ шапки: gclid,name,time,value,currency,type,sent
+  var tz = spreadsheet.getSpreadsheetTimeZone();
   var upload = AdsApp.bulkUploads().newCsvUpload(['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'], { moneyInMicros: false });
   var toMark = [], n = 0;
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][6] === 'sent' || !data[i][0]) continue;
-    upload.append({ 'Google Click ID': data[i][0], 'Conversion Name': data[i][1] || convName, 'Conversion Time': data[i][2], 'Conversion Value': '', 'Conversion Currency': '' });
+  for (var i = 0; i < data.length; i++) {           // с 0-й строки: шапки нет
+    var gclid = String(data[i][0] || '');
+    if (data[i][6] === 'sent' || gclid.length < 40) continue;  // sent / пустое / шапка / TEST — не gclid
+    upload.append({ 'Google Click ID': gclid, 'Conversion Name': data[i][1] || convName, 'Conversion Time': convTimeStr(data[i][2], tz), 'Conversion Value': '', 'Conversion Currency': '' });
     toMark.push(i + 1); n++;
   }
   if (n === 0) { Logger.log('Все конверсии уже отправлены'); return; }
   upload.apply();
   for (var k = 0; k < toMark.length; k++) sh.getRange(toMark[k], 7).setValue('sent');
   Logger.log('Отправлено конверсий: ' + n);
+}
+// Google Ads требует время конверсии С таймзоной. Keitaro отдаёт московское время.
+// В таблице значение могло стать Date (в tz таблицы) — берём его «стенные часы» и клеим +03:00.
+function convTimeStr(v, tz) {
+  var s;
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    s = Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm:ss');
+  } else {
+    s = String(v).trim().replace('T', ' ');
+  }
+  if (/[+\-]\d{2}:?\d{2}$/.test(s) || /Z$/.test(s)) return s;  // уже с таймзоной
+  return s + '+03:00';  // московское время из Keitaro
 }
 
 function getOrCreateSheet(spreadsheet, sheetName) {
