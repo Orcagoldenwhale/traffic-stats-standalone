@@ -3479,7 +3479,7 @@ const OCI_LOADER_CODE = `/**
  * Имя конверсии находит сам (единственная офлайн-конверсия UPLOAD_CLICKS).
  */
 // === НАСТРОЙКА: часовой пояс времени конверсий. По умолчанию Москва (+3), как в ручной выгрузке. ===
-var CONV_TZ_OFFSET = '+03:00';   // формат даты: yyyy-MM-dd HH:mm:ss (зона добавляется этим смещением)
+var CONV_TZ = 'Europe/Moscow';   // часовой пояс конверсий — по умолчанию Москва (+3). Одно место для всех кампаний.
 function main() {
   var acc = AdsApp.currentAccount();
   var spreadsheet = getOrCreateSpreadsheet(acc.getName(), acc.getCustomerId());
@@ -3536,7 +3536,8 @@ function uploadConversions(spreadsheet, convName) {
   if (!sh || sh.getLastRow() < 1) { Logger.log('Нет новых конверсий'); return; }
   var data = sh.getDataRange().getValues();  // приёмник пишет БЕЗ шапки: gclid,name,time,value,currency,type,sent
   var tz = spreadsheet.getSpreadsheetTimeZone();
-  var upload = AdsApp.bulkUploads().newCsvUpload(['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'], { moneyInMicros: false });
+  var upload = AdsApp.bulkUploads().newCsvUpload(['Google Click ID', 'Conversion Name', 'Conversion Time', 'Conversion Value', 'Conversion Currency'], { timeZone: CONV_TZ, moneyInMicros: false });
+  upload.forOfflineConversions();   // КРИТИЧНО: помечает загрузку как конверсионную (без этого Google: «No header row»)
   var toMark = [], n = 0;
   for (var i = 0; i < data.length; i++) {           // с 0-й строки: шапки нет
     var gclid = String(data[i][0] || '');
@@ -3549,17 +3550,13 @@ function uploadConversions(spreadsheet, convName) {
   for (var k = 0; k < toMark.length; k++) sh.getRange(toMark[k], 7).setValue('sent');
   Logger.log('Отправлено конверсий: ' + n);
 }
-// Google Ads требует время конверсии С таймзоной. Keitaro отдаёт московское время.
-// В таблице значение могло стать Date (в tz таблицы) — берём его «стенные часы» и клеим +03:00.
+// Время из таблицы (Date или строка) -> простое "yyyy-MM-dd HH:mm:ss" БЕЗ зоны.
+// Зону задаёт опция timeZone у newCsvUpload (CONV_TZ) — как строка Parameters:TimeZone в ручной выгрузке.
 function convTimeStr(v, tz) {
-  var s;
   if (Object.prototype.toString.call(v) === '[object Date]') {
-    s = Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm:ss');
-  } else {
-    s = String(v).trim().replace('T', ' ');
+    return Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm:ss');   // «стенные часы» как в таблице (= московские)
   }
-  if (/[+\-]\d{2}:?\d{2}$/.test(s) || /Z$/.test(s)) return s;  // уже с таймзоной
-  return s + CONV_TZ_OFFSET;  // московское время из Keitaro (см. настройку сверху)
+  return String(v).trim().replace('T', ' ').replace(/\s*[+\-]\d{2}:?\d{2}$/, '').replace(/Z$/, '').trim();
 }
 
 function getOrCreateSheet(spreadsheet, sheetName) {
