@@ -3478,6 +3478,8 @@ const OCI_LOADER_CODE = `/**
  *   2) Конверсии: лист "conversions" (туда пишет приёмник) -> грузит в Google Ads.
  * Имя конверсии находит сам (единственная офлайн-конверсия UPLOAD_CLICKS).
  */
+// === НАСТРОЙКА: часовой пояс времени конверсий. По умолчанию Москва (+3), как в ручной выгрузке. ===
+var CONV_TZ_OFFSET = '+03:00';   // формат даты: yyyy-MM-dd HH:mm:ss (зона добавляется этим смещением)
 function main() {
   var acc = AdsApp.currentAccount();
   var spreadsheet = getOrCreateSpreadsheet(acc.getName(), acc.getCustomerId());
@@ -3557,7 +3559,7 @@ function convTimeStr(v, tz) {
     s = String(v).trim().replace('T', ' ');
   }
   if (/[+\-]\d{2}:?\d{2}$/.test(s) || /Z$/.test(s)) return s;  // уже с таймзоной
-  return s + '+03:00';  // московское время из Keitaro
+  return s + CONV_TZ_OFFSET;  // московское время из Keitaro (см. настройку сверху)
 }
 
 function getOrCreateSheet(spreadsheet, sheetName) {
