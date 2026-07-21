@@ -3556,7 +3556,7 @@ function convTimeStr(v, tz) {
   if (Object.prototype.toString.call(v) === '[object Date]') {
     return Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm:ss');   // «стенные часы» как в таблице (= московские)
   }
-  return String(v).trim().replace('T', ' ').replace(/\s*[+\-]\d{2}:?\d{2}$/, '').replace(/Z$/, '').trim();
+  return String(v).trim().replace('T', ' ');   // приёмник пишет московское время без зоны — regex не нужен (внутри template literal слэши съедались)
 }
 
 function getOrCreateSheet(spreadsheet, sheetName) {
